@@ -17,10 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgmp-dev libdb-dev gettext \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /tmp
-RUN curl -fsSL -o gnucobol.tar.gz \
-        https://sourceforge.net/projects/gnucobol/files/gnucobol/3.2/gnucobol-3.2.0.tar.gz/download \
+# NOTA: o tarball oficial e gnucobol-3.2.tar.gz (nao "3.2.0"); verificado em
+# 2026-10-01 — a URL com "3.2.0" retorna 404 no SourceForge.
+RUN curl -fsSL --retry 3 --retry-delay 5 -o gnucobol.tar.gz \
+        https://sourceforge.net/projects/gnucobol/files/gnucobol/3.2/gnucobol-3.2.tar.gz/download \
     && tar xzf gnucobol.tar.gz \
-    && cd gnucobol-3.2.0 \
+    && cd gnucobol-3.2 \
     && ./configure --without-db --without-readline >/dev/null \
     && make -j$(nproc) >/dev/null \
     && make install >/dev/null \
@@ -61,6 +63,7 @@ ENV LBAPI_HOST=0.0.0.0 \
     LBAPI_DATA_DIR=/data \
     LBAPI_BIN=/app/bin/lb-api \
     LBAPI_WEB_DIR=/app/web/dist \
+    LBAPI_DEMO_MODE=1 \
     PYTHONUNBUFFERED=1
 EXPOSE 8123
 VOLUME /data

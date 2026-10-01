@@ -574,3 +574,24 @@ Comentário de alerta no fonte + lição em `~/AGENTS.md`.
 
 **Verificação:** `STATEMENT` completo, listagens e dashboard OK;
 suíte verde.
+
+## D35 — Auth demo-grade via LBAPI_TOKEN (adendo TESTE 5 §8, 2026-10-01)
+
+**Problema:** a API foi desenhada para localhost; exposta na internet,
+qualquer um poderia operar contas demo.
+
+**Decisão:** token compartilhado via env `LBAPI_TOKEN` (nunca commitado;
+`.env.example` só com a chave vazia; `render.yaml` usa `generateValue`).
+Quando definido: exige `Authorization: Bearer <token>` em `/api/v1/*`,
+exceto `/api/v1/health` (health check da plataforma precisa ser aberto).
+401 com `{"error":"unauthorized"}`. Quando vazio: acesso livre (dev local).
+
+**Frontend:** guarda o token no `localStorage`; captura `?token=` da URL
+no boot (link de acesso demo); em qualquer 401 abre o `TokenGate`.
+Nada do token vai para o bundle em build-time.
+
+**Alternativas rejeitadas:** login/senha (overkill p/ demo); token no
+bundle via build-arg (vaza no JS público + render.yaml não suporta
+build args); auth só em mutações (leitura também vaza dados demo).
+
+**Documentado como:** demo pública ≠ produção bancária (L05).

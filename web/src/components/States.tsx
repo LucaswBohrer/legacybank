@@ -78,6 +78,15 @@ function describeError(err: unknown): { title: string; detail: string; kind: 'er
         kind: 'warn',
       };
     }
+    if (err.isUnauthorized) {
+      return {
+        title: 'Acesso demo necessário',
+        detail:
+          'Este ambiente exige o token de acesso demo (header Authorization). ' +
+          'Use o link com ?token= ou informe o token abaixo.',
+        kind: 'warn',
+      };
+    }
     return { title: `Erro ${err.status}`, detail: err.message, kind: 'err' };
   }
   return {

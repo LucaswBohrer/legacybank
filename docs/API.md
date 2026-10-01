@@ -39,9 +39,32 @@ Variáveis de ambiente:
 | `LBAPI_BIN`      | `../bin/lb-api`     | Caminho do driver COBOL                |
 | `LBAPI_WEB_DIR`  | `../web/dist`       | Frontend estático servido pela API     |
 | `LBAPI_TIMEOUT`  | `30`                | Timeout por operação, em segundos      |
+| `LBAPI_TOKEN`    | *(vazio)*           | Token demo — exige `Authorization: Bearer` (§ Auth) |
+| `LBAPI_DEMO_MODE`| *(vazio)*           | `1` = health expõe `demo:true` + selo na UI |
 
-A API escuta apenas em `127.0.0.1` por desenho (integração local).
-Não há autenticação: exponha via reverse proxy com auth se necessário.
+A API escuta apenas em `127.0.0.1` por desenho (integração local;
+no Docker usa `0.0.0.0`).
+
+## Autenticação demo (TESTE 5, adendo §8)
+
+Quando `LBAPI_TOKEN` está definido e não-vazio, todos os endpoints
+`/api/v1/*` exigem o header `Authorization: Bearer <token>` —
+**exceto** `GET /api/v1/health` (aberto para o health check da
+plataforma). Sem o token: `401 {"error":"unauthorized"}`.
+
+```bash
+curl -H "Authorization: Bearer $LBAPI_TOKEN" localhost:8123/api/v1/dashboard
+```
+
+Regras:
+
+- O valor **nunca** é commitado (ver `.env.example` e `render.yaml`
+  com `generateValue`).
+- Local (token vazio): acesso livre, zero fricção.
+- O frontend guarda o token no `localStorage` e captura `?token=` da
+  URL no primeiro acesso; em 401 abre a tela de acesso demo.
+- **Demo pública ≠ produção bancária** (ver L05): token compartilhado,
+  sem rate limiting, sem sessões. Não usar para dados reais.
 
 ## Endpoints
 
@@ -205,6 +228,9 @@ Principais RCs do core (ver `docs/DECISOES.md` e código-fonte):
 - **Core indisponível** (binário ausente, diretório de dados ausente,
   timeout, crash, saída ilegível) → **503** `core_unavailable`.
   `/health` distingue `api: ok` de `core: unavailable` (também 503).
+- **`/health` em modo demo**: com `LBAPI_DEMO_MODE=1`, inclui
+  `"demo": true` e `"storage": "ephemeral"` (a UI exibe o selo
+  DEMO ENVIRONMENT). Sem a flag: `"demo": false`, `"storage": "local"`.
 - **Queda no meio da operação**: o driver faz INIT→LOAD→ENTRY→SAVE num
   único processo. Se o processo morre entre o journal e o SAVE, o
   `LB-DATA-CHECK` detecta divergência na próxima operação e o driver

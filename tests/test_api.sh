@@ -369,6 +369,51 @@ SAQUE;TX-LOTE-3;10000001;5.00')
         bad "temporario do lote removido"
 }
 
+# ------------------------------------------------- auth demo (TESTE 5, adendo §8)
+# Sobe uma segunda API com LBAPI_TOKEN definido e valida o 401.
+test_auth() {
+    local P2=8138
+    local B2="http://127.0.0.1:$P2/api/v1"
+    local LOG="$D-auth.log"
+    LBAPI_DATA_DIR="$D" LBAPI_PORT="$P2" LBAPI_TOKEN="tok-teste-123" \
+        LBAPI_DEMO_MODE=1 \
+        nohup "$PYBIN" api/lbapi.py >"$LOG" 2>&1 &
+    local pid=$!
+    local ok_up=0
+    for _ in $(seq 1 30); do
+        hget "$B2/health" >/dev/null 2>&1 && { ok_up=1; break; }
+        sleep 0.5
+    done
+    if [ "$ok_up" -eq 0 ]; then
+        bad "API com token nao subiu"; tail -5 "$LOG"
+        kill "$pid" 2>/dev/null; return
+    fi
+    # health sempre aberto, mesmo com token
+    assert_eq 200 "$(hcode GET "$B2/health")" "health aberto com token"
+    assert_eq "True" "$(hget "$B2/health" | jget "['demo']")" \
+        "health expoe demo:true"
+    assert_eq "ephemeral" "$(hget "$B2/health" | jget "['storage']")" \
+        "health expoe storage:ephemeral"
+    # sem token -> 401
+    assert_eq 401 "$(hcode GET "$B2/dashboard")" \
+        "dashboard sem token = 401"
+    assert_eq 401 "$(hcode POST "$B2/customers" '{}')" \
+        "POST sem token = 401"
+    # token errado -> 401
+    assert_eq 401 "$("$PYBIN" "$HTTPC" --code -H 'Authorization: Bearer errado' \
+        GET "$B2/dashboard")" "token errado = 401"
+    # token certo -> 200
+    assert_eq 200 "$("$PYBIN" "$HTTPC" --code -H 'Authorization: Bearer tok-teste-123' \
+        GET "$B2/dashboard")" "token certo = 200"
+    local body
+    body=$("$PYBIN" "$HTTPC" -H 'Authorization: Bearer tok-teste-123' \
+        GET "$B2/dashboard")
+    assert_eq "True" "$(echo "$body" | "$PYBIN" -c \
+        "import json,sys; print('customers' in json.load(sys.stdin))")" \
+        "dashboard autenticado retorna dados"
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; rm -f "$LOG"
+}
+
 # ---------------------------------------------------------------- main
 setup || { echo "setup falhou"; exit 1; }
 trap teardown EXIT
@@ -390,6 +435,7 @@ test_dashboard
 test_transactions_list
 test_audit
 test_batch
+test_auth
 
 echo ""
 echo "=========================================="

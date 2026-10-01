@@ -111,10 +111,13 @@ Limites honestos restantes no Windows:
 
 ## L05 — Web banking é educacional, não production-ready
 
-O TESTE 5 entrega um web banking funcional, mas: sem autenticação
-(qualquer um com acesso à URL opera tudo), sem HTTPS próprio (depende
-do provedor), sem rate limiting, sem CSRF, API escuta em `127.0.0.1`
-por desenho local. Não expor sem uma camada de auth na frente.
+O TESTE 5 entrega um web banking funcional com **auth demo-grade**
+(`LBAPI_TOKEN`, adendo §8, decisão D35): quando definido, exige
+`Authorization: Bearer` em `/api/v1/*` (exceto `/health`). Mas: sem
+HTTPS próprio (depende do provedor), sem rate limiting, sem CSRF, sem
+gestão de usuários/sessões — o token é compartilhado e vive no
+localStorage do navegador. **Demo pública ≠ produção bancária.**
+Não usar para dados reais.
 
 ## L06 — Deploy gratuito = filesystem efêmero (modo demo)
 

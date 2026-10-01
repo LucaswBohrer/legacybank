@@ -8,6 +8,8 @@ export interface Health {
   version: string;
   rc?: string;
   reason?: string;
+  demo?: boolean;
+  storage?: string;
 }
 
 export interface JournalLine {

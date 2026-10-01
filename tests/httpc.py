@@ -25,11 +25,22 @@ TIMEOUT = 30
 
 def main(argv):
     mode = "body"
-    if argv and argv[0] in ("--code", "--body-code"):
-        mode = argv[0][2:]
-        argv = argv[1:]
+    headers_extra = {}
+    args = []
+    i = 0
+    while i < len(argv):
+        if argv[i] in ("--code", "--body-code"):
+            mode = argv[i][2:]
+        elif argv[i] == "-H" and i + 1 < len(argv):
+            i += 1
+            k, _, v = argv[i].partition(":")
+            headers_extra[k.strip()] = v.strip()
+        else:
+            args.append(argv[i])
+        i += 1
+    argv = args
     if len(argv) < 2:
-        sys.stderr.write("uso: httpc.py [--code|--body-code] METODO URL [DADOS]\n")
+        sys.stderr.write("uso: httpc.py [--code|--body-code] [-H 'K: V'] METODO URL [DADOS]\n")
         return 2
     method, url = argv[0].upper(), argv[1]
     data = argv[2] if len(argv) > 2 else None
@@ -47,9 +58,9 @@ def main(argv):
         path += "?" + p.query
 
     body = data.encode("utf-8") if data is not None else None
-    headers = {}
+    headers = dict(headers_extra)
     if body is not None:
-        headers["Content-Type"] = "application/json"
+        headers.setdefault("Content-Type", "application/json")
         headers["Content-Length"] = str(len(body))
     try:
         conn = conn_cls(host, port, timeout=TIMEOUT)

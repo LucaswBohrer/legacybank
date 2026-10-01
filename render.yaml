@@ -25,5 +25,13 @@ services:
         value: 0.0.0.0
       - key: LBAPI_DATA_DIR
         value: /data
+      - key: LBAPI_DEMO_MODE
+        value: 1
       - key: PYTHONUNBUFFERED
         value: 1
+      # Token de acesso demo — gerado automaticamente pelo Render no primeiro
+      # deploy (nunca commitado). O frontend pede o token no primeiro acesso
+      # ou via ?token= na URL. Sem o token, /api/v1/* retorna 401
+      # (exceto /api/v1/health, usado pelo health check).
+      - key: LBAPI_TOKEN
+        generateValue: true

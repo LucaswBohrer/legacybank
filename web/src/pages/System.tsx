@@ -56,6 +56,20 @@ export default function System() {
               <dd>por TX-ID, no core</dd>
               <dt>Dinheiro</dt>
               <dd>centavos inteiros; nenhum float no frontend</dd>
+              <dt>Ambiente</dt>
+              <dd>
+                {data.demo ? (
+                  <span className="badge warn">DEMO — storage efêmero</span>
+                ) : (
+                  <span className="badge ok">local</span>
+                )}
+              </dd>
+              <dt>Acesso</dt>
+              <dd>
+                {data.demo
+                  ? 'Token demo (LBAPI_TOKEN) — demo pública ≠ produção bancária'
+                  : 'Livre (LBAPI_TOKEN não definido)'}
+              </dd>
             </dl>
             <div className="action-bar">
               <button className="btn" onClick={reload}>

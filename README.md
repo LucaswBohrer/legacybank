@@ -180,8 +180,24 @@ completo sem duplicar regra financeira (o core COBOL decide tudo).
 ```
 
 Páginas: dashboard, clientes, contas, extrato, transações, estornos,
-auditoria, lote e sistema. Deploy gratuito via Docker (`Dockerfile` +
-`render.yaml`); no plano gratuito o filesystem é efêmero (modo demo).
+auditoria, lote e sistema.
+
+## Deploy público gratuito (adendo TESTE 5)
+
+`Dockerfile` multi-stage (GnuCOBOL 3.2 do fonte + Node 20 + Python 3.12)
+e `render.yaml` (Render Free) prontos. Container único: frontend
+estático + API Python + core COBOL, uma porta (`$PORT`), health check
+em `/api/v1/health`.
+
+**Passo manual (não automatizável):** após o push para o GitHub,
+no dashboard do Render: New → Blueprint → selecione o repo. O
+`render.yaml` cria o serviço; o `LBAPI_TOKEN` é gerado automaticamente
+(`generateValue`) — copie o valor em Environment para montar o link de
+acesso: `https://<servico>.onrender.com/?token=<valor>`.
+
+Modo demo: a UI exibe o selo **DEMO ENVIRONMENT · Storage: EPHEMERAL ·
+Core: COBOL**; dados zeram em restart/redeploy (filesystem efêmero).
+**Demo pública ≠ produção bancária** (ver `docs/LIMITACOES.md` L05).
 
 ## Status
 

@@ -45,6 +45,14 @@ DATA_DIR = os.environ.get("LBAPI_DATA_DIR", "./data")
 PORT = int(os.environ.get("LBAPI_PORT", os.environ.get("PORT", "8123")))
 HOST = os.environ.get("LBAPI_HOST", "127.0.0.1")
 TIMEOUT = float(os.environ.get("LBAPI_TIMEOUT", "30"))
+# Auth demo-grade (§8 do adendo TESTE 5): quando definido e nao-vazio, todos
+# os endpoints /api/v1/* exigem "Authorization: Bearer <token>" (exceto
+# /api/v1/health, usado pelo health check da plataforma). Local: vazio = livre.
+# NUNCA commitar o valor — ver .env.example e render.yaml (generateValue).
+API_TOKEN = os.environ.get("LBAPI_TOKEN", "")
+# Modo demo: 1 = health expoe demo:true/storage:ephemeral e a UI exibe o selo
+# "DEMO ENVIRONMENT". Deploy gratuito usa 1 (filesystem efemero).
+DEMO_MODE = os.environ.get("LBAPI_DEMO_MODE", "") == "1"
 BIN = os.environ.get(
     "LBAPI_BIN",
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -368,6 +376,26 @@ class Handler(BaseHTTPRequestHandler):
     def _err(self, status, code, message, **extra):
         self._send(status, {"error": code, "message": message, **extra})
 
+    def _check_auth(self, path, t0):
+        """Auth demo-grade: 401 se LBAPI_TOKEN definido e Bearer ausente/invalido.
+
+        /api/v1/health fica sempre aberto (health check da plataforma).
+        Retorna True se autorizado (ou auth desabilitada), False se negado
+        (ja respondeu 401).
+        """
+        if not API_TOKEN:
+            return True
+        if path == f"{API_PREFIX}/health":
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth == f"Bearer {API_TOKEN}":
+            return True
+        self._api_log(t0, None, "unauthorized", "-", 401)
+        self._err(401, "unauthorized",
+                  "token de acesso demo ausente ou invalido "
+                  "(header Authorization: Bearer <LBAPI_TOKEN>)")
+        return False
+
     def _body(self):
         try:
             n = int(self.headers.get("Content-Length", 0))
@@ -413,7 +441,27 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == f"{API_PREFIX}/health":
                 self._health(t0)
-            elif path == f"{API_PREFIX}/dashboard":
+            elif path.startswith(f"{API_PREFIX}/") or path == API_PREFIX:
+                if not self._check_auth(path, t0):
+                    return
+                self._route_get(path, u, t0)
+            elif self._serve_static(path):
+                self._api_log(t0, None, "static", "-", 200)
+            else:
+                self._api_log(t0, None, "not_found", "-", 404)
+                self._err(404, "not_found", "recurso inexistente")
+        except CoreUnavailable as e:
+            self._api_log(t0, None, "core", "-", 503)
+            self._err(503, "core_unavailable", str(e))
+        except Exception as e:  # noqa: BLE001 - nunca vazar stack
+            log.exception("erro interno")
+            self._api_log(t0, None, "internal", "-", 500)
+            self._err(500, "internal_error", "erro interno")
+
+    def _route_get(self, path, u, t0):
+        """Rotas GET autenticadas (o health check ja foi tratado antes)."""
+        try:
+            if path == f"{API_PREFIX}/dashboard":
                 self._dashboard(t0)
             elif path == f"{API_PREFIX}/customers":
                 self._customers(t0)
@@ -435,8 +483,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._tx_get(m.group(1), t0)
             elif path == f"{API_PREFIX}/audit":
                 self._audit(t0, parse_qs(u.query))
-            elif self._serve_static(path):
-                self._api_log(t0, None, "static", "-", 200)
             else:
                 self._api_log(t0, None, "not_found", "-", 404)
                 self._err(404, "not_found", "recurso inexistente")
@@ -451,6 +497,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         t0 = time.monotonic()
         path = urlparse(self.path).path
+        if path.startswith(f"{API_PREFIX}/"):
+            if not self._check_auth(path, t0):
+                return
         try:
             routes = {
                 f"{API_PREFIX}/transactions/deposit": ("deposit", self._deposit),
@@ -493,7 +542,10 @@ class Handler(BaseHTTPRequestHandler):
         st = 200 if core_st == "ok" else 503
         self._api_log(t0, None, "health", "-", st)
         self._send(st, {"api": "ok", "core": core_st,
-                        "version": VERSION, **detail})
+                        "version": VERSION,
+                        "demo": DEMO_MODE,
+                        "storage": "ephemeral" if DEMO_MODE else "local",
+                        **detail})
 
     def _account(self, acc, t0):
         try:

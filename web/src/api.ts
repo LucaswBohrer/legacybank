@@ -18,6 +18,35 @@ import type {
 
 const BASE = '/api/v1';
 
+const TOKEN_KEY = 'lbapi_token';
+
+/** Token demo lido do localStorage (ou ?token= na URL, capturado no boot). */
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string): void {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+/** Captura ?token= da URL no primeiro carregamento (link de acesso demo). */
+export function captureTokenFromUrl(): boolean {
+  try {
+    const u = new URL(window.location.href);
+    const t = u.searchParams.get('token');
+    if (t) {
+      setToken(t);
+      u.searchParams.delete('token');
+      window.history.replaceState(null, '', u.toString());
+      return true;
+    }
+  } catch {
+    /* URL inválida — ignora */
+  }
+  return false;
+}
+
 /** Erro HTTP da API (ou falha de rede = status 0). */
 export class ApiError extends Error {
   status: number;
@@ -38,13 +67,21 @@ export class ApiError extends Error {
   get isOffline(): boolean {
     return this.status === 0;
   }
+
+  /** true quando o servidor exige token demo (401 unauthorized). */
+  get isUnauthorized(): boolean {
+    return this.status === 401;
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   let resp: Response;
   try {
     resp = await fetch(BASE + path, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
       ...init,
     });
   } catch (e) {
@@ -63,12 +100,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!resp.ok) {
     const b = (body ?? {}) as ApiErrorBody;
-    throw new ApiError(
+    const err = new ApiError(
       resp.status,
       b.error ?? `http_${resp.status}`,
       b.message ?? `Erro HTTP ${resp.status}`,
       b,
     );
+    // 401 = token demo ausente/invalido: avisa a UI global (TokenGate).
+    if (resp.status === 401) {
+      window.dispatchEvent(new CustomEvent('lbapi:unauthorized'));
+    }
+    throw err;
   }
   return body as T;
 }

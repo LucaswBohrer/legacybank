@@ -351,3 +351,39 @@ td .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; fon
 @media (max-width: 420px) {
   .grid.cards { grid-template-columns: 1fr; }
 }
+
+/* ------------------------------------------------------------ demo / boot */
+.demo-badge {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 7px 12px;
+  background: repeating-linear-gradient(
+    -45deg,
+    #7c2d12,
+    #7c2d12 14px,
+    #93370f 14px,
+    #93370f 28px
+  );
+  color: #fff7ed;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+}
+.demo-badge strong { letter-spacing: 0.12em; }
+.demo-badge span { opacity: 0.92; }
+
+.boot-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 24px;
+  text-align: center;
+}
+.boot-screen .brand h1 { font-size: 2rem; margin: 0; }
