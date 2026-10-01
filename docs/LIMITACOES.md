@@ -54,11 +54,22 @@ arquivos).
 
 `LB-NOW` usa o horário local da máquina.
 
-## L08 — Sem camada web
+## L08 — Camada web: API REST de integração (TESTE 4, 2026-10-01)
 
-Por decisão de escopo (D12): a entrega atual é CLI + batch. Uma API/web
-deverá chamar os mesmos ENTRY points do núcleo — nunca reimplementar
-as regras.
+~~Por decisão de escopo (D12): a entrega atual é CLI + batch.~~
+
+**Implementada** como camada fina de integração (`api/lbapi.py` +
+`bin/lb-api`, D25–D28, `docs/API.md`). Limites honestos da camada:
+
+- **Throughput**: ~15-18 op/s (lock global + spawn de subprocesso por
+  operação, ~60-95ms cada). A API não aumenta a capacidade do core.
+- **Sem autenticação**: escuta só em 127.0.0.1; expor publicamente
+  exige reverse proxy com auth/TLS (fora do escopo).
+- **Sem retry automático**: o retry seguro é o replay idempotente pelo
+  cliente (mesmo `tx_id`).
+- **Queda mid-operação**: se o driver morre entre journal e SAVE, o
+  `LB-DATA-CHECK` (L03) faz a próxima operação retornar 503 até
+  intervenção manual — a API não faz auto-reparo silencioso.
 
 ## L09 — Estorno de transação antiga varre o journal
 

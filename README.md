@@ -125,21 +125,22 @@ Detalhes em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
 | [`docs/MANUAL-CLI.md`](docs/MANUAL-CLI.md) | Uso do menu e do lote, sessão de exemplo |
 | [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md) | Módulos, fluxo de operação, RCs |
 | [`docs/FORMATO-DADOS.md`](docs/FORMATO-DADOS.md) | Layout de cada arquivo de dados |
-| [`docs/DECISOES.md`](docs/DECISOES.md) | Decisões técnicas e motivos (D01–D20) |
+| [`docs/DECISOES.md`](docs/DECISOES.md) | Decisões técnicas e motivos (D01–D28) |
+| [`docs/API.md`](docs/API.md) | Manual da API REST (`/api/v1`) |
 | [`docs/TESTES.md`](docs/TESTES.md) | Suítes, como rodar, bugs encontrados |
 | [`docs/LIMITACOES.md`](docs/LIMITACOES.md) | Limitações honestas e próximos passos |
 
 ## Testes
 
 ```bash
-./tests/run_all.sh           # 63 asserções: funcionais + integridade + batch + índice
+./tests/run_all.sh           # 161 asserções: funcionais + integridade + batch + índice + estorno + API
 ./tests/run_all.sh --carga   # + 100.000 transações em lote
 ```
 
-Última execução: **63/63 passando**. O teste de carga (100k transações,
-seed determinística, ~13 s após a otimização do índice hash — era ~30 min
-na v1.0) valida que a soma dos saldos confere exatamente com o lote.
-Detalhes em `docs/PERFORMANCE.md`.
+Última execução: **161/161 passando** (125 legados + 36 da API).
+O teste de carga (100k transações, seed determinística, ~13 s após a
+otimização do índice hash — era ~30 min na v1.0) valida que a soma dos
+saldos confere exatamente com o lote. Detalhes em `docs/PERFORMANCE.md`.
 
 ## Estrutura
 
@@ -154,8 +155,22 @@ legacybank/
 └── tests/          # suíte de testes
 ```
 
+## API REST
+
+Camada de integração HTTP (`/api/v1`) sobre o core COBOL — o COBOL
+continua sendo a única fonte de verdade financeira.
+
+```bash
+LBAPI_DATA_DIR=./data LBAPI_PORT=8123 python3 api/lbapi.py
+curl -X POST localhost:8123/api/v1/transactions/deposit \
+  -d '{"tx_id":"API-001","account":"10000001","amount":"1000.00"}'
+```
+
+Manual completo em [`docs/API.md`](docs/API.md): contrato, erros,
+idempotência, concorrência, falhas e limites honestos.
+
 ## Status
 
-Funcional e testado em Linux x86_64 (GnuCOBOL 3.2.0). Sem camada web —
-decisão de escopo: o núcleo é CLI + batch, e qualquer frontend futuro
-deve chamar os mesmos ENTRY points, nunca reimplementar as regras.
+Funcional e testado em Linux x86_64 (GnuCOBOL 3.2.0, Python 3 stdlib).
+A API REST é camada de integração: chama os mesmos ENTRY points do
+core via driver dedicado, nunca reimplementa as regras.

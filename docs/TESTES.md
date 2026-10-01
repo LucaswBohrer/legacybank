@@ -17,6 +17,7 @@
 | Batch | `tests/test_batch.sh` | Contadores ok/rejeitada/duplicada/inválida; reenvio integral do lote é idempotente (saldos inalterados); relatório do lote é gerado. 10 asserções. |
 | Índice | `tests/test_indice.sh` | Índice hash do TX-ID (D20): unicidade, colisões, reconstrução no LOAD, equivalência financeira antes/depois. 23 asserções. |
 | Estorno | `tests/test_estorno.sh` | Estorno de depósito/saque/transferência; devolução integral de tarifas; RC 12/13/14; idempotência (imediata e pós-restart); saldo insuficiente; atomicidade; formato antigo via journal (D23); extrato e relatório; CLI opção 15. 62 asserções. |
+| API REST | `tests/test_api.sh` | Contrato `/api/v1` (health, conta, extrato, tx, 4 operações); mapeamento RC→HTTP (201/200/400/404/422/503); rejeição de float; idempotência imediata e pós-restart; concorrência (30 depósitos); reconciliação CLI×API. 36 asserções. |
 | Carga | `tests/test_carga.sh` | 100.000 transações (seed fixa 42, 60% depósitos / 20% saques / 20% transferências); confere que a soma dos saldos bate com o lote. |
 
 `tests/lib.sh` tem os helpers (`assert_eq`, `assert_contains`, `parse_saldo`, `run_menu`).
@@ -29,9 +30,10 @@ integridade:   8 passaram, 0 falharam
 batch:        10 passaram, 0 falharam
 indice:       23 passaram, 0 falharam
 estorno:      62 passaram, 0 falharam
+api:          36 passaram, 0 falharam
 ```
 
-Total: **125/125**, zero regressão.
+Total: **161/161**, zero regressão.
 
 ## Teste de carga — 100.000 transações
 
@@ -64,3 +66,6 @@ R$ 1.000.000,00 para não haver rejeição por saldo):
 5. `FIN-ESTORNO` usava itens de LINKAGE fora do `USING` → segfault; substituídos por campos de trabalho e parágrafos próprios.
 6. `P-PARSE-TXREG` descartava o 5º campo (`;ESTORNADA`) no LOAD → carimbo perdido a cada SAVE; segundo estorno voltava a ser permitido (D24).
 7. `LB-MOV-FIND-TX` abria `ARQ-MOV` já aberto em EXTEND → `FS=41`; agora fecha, lê em INPUT e reabre em EXTEND (D23).
+8. Parágrafo PERFORMado entre dois ENTRYs em `lb-consulta.cbl` → segfault na 2ª iteração do extrato; movido para após todos os ENTRYs (lição em `AGENTS.md`).
+9. Driver `lb-api` passava `X(8)` para `LB-CTA-FIND` (`LK-ID X(24)`) → "conta inexistente" na API; usa `WS-ID24` como o core faz.
+10. Comparação de RC como string (`"00"` vs `"0"`) quebrava lookup de conta na API; parse via `int()` tolerante.

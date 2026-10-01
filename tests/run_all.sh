@@ -3,13 +3,13 @@
 set -u
 cd "$(dirname "$0")/.."
 
-if [ ! -x ./bin/legacybank ] || [ ! -x ./bin/lb-lote ] || [ ! -x ./bin/lb-init ]; then
+if [ ! -x ./bin/legacybank ] || [ ! -x ./bin/lb-lote ] || [ ! -x ./bin/lb-init ] || [ ! -x ./bin/lb-api ]; then
     echo "Binarios nao encontrados. Rode ./scripts/build.sh primeiro."
     exit 2
 fi
 
 TOTAL_FAIL=0
-for t in tests/test_funcional.sh tests/test_integridade.sh tests/test_batch.sh tests/test_indice.sh tests/test_estorno.sh; do
+for t in tests/test_funcional.sh tests/test_integridade.sh tests/test_batch.sh tests/test_indice.sh tests/test_estorno.sh tests/test_api.sh; do
     echo ""
     echo "########## $t ##########"
     bash "$t"

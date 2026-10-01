@@ -45,6 +45,7 @@ WORKING-STORAGE SECTION.
 01 WS-SOMA-MOV        PIC S9(13).
 01 WS-SALDO-ABERT     PIC S9(13).
 01 WS-CORR            PIC S9(13).
+01 WS-EFEITO          PIC S9(13).
 01 WS-FOUND           PIC X(1).
 01 WS-TIPO            PIC X(13).
 01 WS-CONTA           PIC X(8).
@@ -150,6 +151,55 @@ ENTRY "CONS-EXTRATO" USING LK-DIR LK-CONTA.
     PERFORM P-FORMATA-SINAL.
     DISPLAY "Saldo atual:    R$ " FUNCTION TRIM(WS-VLR-FMT).
     DISPLAY "==========================================".
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> CONS-EXTRATO-API: extrato em formato maquina-legivel (D26).
+*> Mesma logica de CONS-EXTRATO (duas passadas sobre o journal,
+*> mesma convencao de sinais), mas emite linhas "CHAVE: valor".
+*> Nao altera nenhum comportamento existente.
+*>--------------------------------------------------------------*
+ENTRY "CONS-EXTRATO-API" USING LK-DIR LK-CONTA.
+    PERFORM P-DEFINE-DIR.
+    PERFORM P-BUSCA-SALDO-ATUAL.
+    IF WS-FOUND = "N"
+        DISPLAY "STMT-ERROR: conta inexistente"
+        GOBACK
+    END-IF.
+    DISPLAY "STMT-ACCOUNT: " FUNCTION TRIM(LK-CONTA).
+    MOVE 0 TO WS-SOMA-MOV.
+    PERFORM P-ABRE-MOV-INPUT.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-MOV
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END
+                    MOVE FD-MOV-LINE TO WS-LINE
+                    PERFORM P-PARSE-MOV
+                    PERFORM P-SOMA-SE-DA-CONTA
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-MOV
+    END-IF.
+    COMPUTE WS-SALDO-ABERT = WS-SALDO-ATUAL - WS-SOMA-MOV.
+    DISPLAY "STMT-OPENING: " WS-SALDO-ABERT.
+    MOVE WS-SALDO-ABERT TO WS-CORR.
+    PERFORM P-ABRE-MOV-INPUT.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-MOV
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END
+                    MOVE FD-MOV-LINE TO WS-LINE
+                    PERFORM P-PARSE-MOV
+                    PERFORM P-EMITE-SE-DA-CONTA
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-MOV
+    END-IF.
+    DISPLAY "STMT-CURRENT: " WS-SALDO-ATUAL.
     GOBACK.
 
 *>--------------------------------------------------------------*
@@ -543,4 +593,48 @@ P-PONTUA-MILHAR.
             ADD 1 TO WS-J
         END-IF
     END-PERFORM.
+    .
+
+*>--------------------------------------------------------------*
+*> P-EMITE-SE-DA-CONTA: emite uma linha STMT-MOV maquina-legivel
+*> para o ENTRY CONS-EXTRATO-API (D26). Mesma convencao de sinais
+*> de P-EXIBE-SE-DA-CONTA.
+*>--------------------------------------------------------------*
+P-EMITE-SE-DA-CONTA.
+    COMPUTE WS-NUM-N = FUNCTION NUMVAL(WS-F6).
+    MOVE 0 TO WS-EFEITO.
+    EVALUATE WS-TIPO
+        WHEN "DEPOSITO"
+            IF WS-CONTA = FUNCTION TRIM(LK-CONTA)
+                ADD WS-NUM-N TO WS-EFEITO
+            END-IF
+        WHEN "SAQUE"
+            IF WS-CONTA = FUNCTION TRIM(LK-CONTA)
+                SUBTRACT WS-NUM-N FROM WS-EFEITO
+            END-IF
+        WHEN "TARIFA"
+            IF WS-CONTA = FUNCTION TRIM(LK-CONTA)
+                SUBTRACT WS-NUM-N FROM WS-EFEITO
+            END-IF
+        WHEN "TRANSFERENCIA"
+            IF WS-CONTA = FUNCTION TRIM(LK-CONTA)
+                SUBTRACT WS-NUM-N FROM WS-EFEITO
+            END-IF
+            IF WS-CONTA-DEST = FUNCTION TRIM(LK-CONTA)
+                ADD WS-NUM-N TO WS-EFEITO
+            END-IF
+        WHEN "ESTORNO"
+            IF WS-CONTA = FUNCTION TRIM(LK-CONTA)
+                SUBTRACT WS-NUM-N FROM WS-EFEITO
+            END-IF
+            IF WS-CONTA-DEST = FUNCTION TRIM(LK-CONTA)
+                ADD WS-NUM-N TO WS-EFEITO
+            END-IF
+    END-EVALUATE.
+    IF WS-EFEITO NOT = 0
+        ADD WS-EFEITO TO WS-CORR
+        DISPLAY "STMT-MOV: " FUNCTION TRIM(WS-F2) ";"
+            FUNCTION TRIM(WS-TIPO) ";" WS-EFEITO ";"
+            WS-CORR ";" FUNCTION TRIM(WS-F7)
+    END-IF.
     .

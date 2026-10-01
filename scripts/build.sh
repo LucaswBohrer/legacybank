@@ -24,9 +24,17 @@ cobc -x $COBFLAGS -o bin/lb-lote \
     src/lb-cad.cbl \
     src/lb-consulta.cbl
 
-echo "[3/3] lb-init (inicializador)..."
+echo "[3/4] lb-init (inicializador)..."
 cobc -x $COBFLAGS -o bin/lb-init \
     src/lb-init.cbl \
     src/lb-dados.cbl
 
-echo "OK: bin/legacybank, bin/lb-lote, bin/lb-init"
+echo "[4/4] lb-api (driver de integracao)..."
+cobc -x $COBFLAGS -o bin/lb-api \
+    src/lb-api.cbl \
+    src/lb-dados.cbl \
+    src/lb-financ.cbl \
+    src/lb-cad.cbl \
+    src/lb-consulta.cbl
+
+echo "OK: bin/legacybank, bin/lb-lote, bin/lb-init, bin/lb-api"

@@ -355,3 +355,97 @@ processo que carregasse e salvasse (inclusive consultar saldo no menu)
 apagava o carimbo e permitia o segundo estorno. O `UNSTRING` em 4 campos
 silenciosamente perdia o 5º campo. A correção preserva o formato do
 arquivo e é compatível com linhas antigas (sem `;` extra).
+
+---
+
+## D25 — Estratégia de integração HTTP↔COBOL (TESTE 4)
+
+**Decisão:** API em Python (stdlib apenas) que invoca um driver COBOL fino
+(`bin/lb-api`, novo `src/lb-api.cbl`) como **subprocesso por operação**.
+O driver faz `INIT → LOAD → 1 ENTRY → SAVE → stdout legível por máquina`
+e nada mais. Toda invocação ao core é serializada por um lock na API.
+
+**Alternativas comparadas e descartadas:**
+
+1. **Biblioteca compartilhada** (`cobc -b` + ctypes/cffi): tecnicamente
+   possível, mas os módulos usam WORKING-STORAGE global (tabelas em
+   memória, índice hash, file descriptors). O runtime GnuCOBOL não oferece
+   garantias de thread-safety para esse uso; chamadas concorrentes
+   corromperiam o estado. Um segfault no core derrubaria a API inteira.
+   Ganho de latência não justifica o risco (prioridades 1–5 da missão).
+2. **Wrapper C ABI dedicado**: mesmos problemas de (1), mais camada extra.
+3. **Daemon COBOL persistente** (pipe/socket): COBOL não tem sockets
+   nativos; exigiria interop C, protocolo próprio e gerenciamento de ciclo
+   de vida — complexidade sem benefício, já que o estado vive nos arquivos.
+4. **Reuso do `lb-lote` via arquivo de 1 linha**: saída human-readable
+   (frágil para parse) e efeito colateral (relatório por execução).
+
+**Por que subprocesso:** isolamento de processo (crash/timeout do core não
+derruba a API; `kill` é o controle de timeout); alinhado à arquitetura
+existente (CLI e batch já são processos separados — L01 estende-se
+naturalmente: a API é o único escritor); sem estado compartilhado;
+custo medido de ~90 ms/operação (spawn + LOAD + SAVE), aceitável para o
+critério de performance da missão ("descobrir o custo", não otimizar
+prematuramente).
+
+**Fronteira:** dinheiro atravessa como **centavos inteiros** (argv);
+o driver nunca calcula tarifa, saldo ou regra — só despacha ENTRYs
+existentes e formata a saída. Leitura e escrita passam pelo mesmo lock
+porque até consultas disparam SAVE (rewrite via temp+rename).
+
+**Revisão de D12:** "nenhuma API" era escopo da entrega original; o TESTE 4
+autoriza a camada de integração, mantendo o core como única fonte de
+verdade financeira.
+
+---
+
+## D26 — Novos ENTRYs de formatação (boundary, não core)
+
+**Decisão:** `CONS-EXTRATO-API` em `lb-consulta.cbl` emite o extrato em
+linhas máquina-legíveis (`STMT-*:`); o driver formata `LB-TX-FIND` e
+`LB-CTA-FIND` da mesma forma. Nenhum ENTRY existente foi alterado.
+
+**Motivo:** o parse do journal (sinais, saldo corrido) continua no COBOL;
+a API só converte linhas `CHAVE: valor` em JSON. Aditivo, sem mudança de
+comportamento do core.
+
+---
+
+## D27 — Mapeamento RC → HTTP
+
+| Situação | HTTP | Corpo |
+|---|---|---|
+| Operação executada (RC 0, 1ª vez) | 201 | tx_id, rc, message, detalhes |
+| Replay idempotente (RC 6) | 200 | mesmos dados + `"replay": true` |
+| Consulta OK | 200 | dados |
+| Payload inválido | 400 | erro, campo |
+| Conta/transação inexistente (consulta) | 404 | erro |
+| Rejeição semântica do core (RC 1–5, 11–14) | 422 | tx_id, rc, message |
+| Core indisponível/timeout/crash | 503 | erro |
+| Erro interno da API | 500 | erro |
+
+409 não é usado: replay idempotente retorna 200 (padrão de idempotency-key).
+O RC financeiro original é sempre preservado no corpo.
+
+---
+
+## D28 — Concorrência: serialização por desenho (VALIDADA na Fase F, 2026-10-01)
+
+**Decisão:** um lock global na API serializa **todas** as invocações ao
+`lb-api` (leitura e escrita).
+
+**Motivo:** L01 — o core é single-user sem file locking; dois processos
+escrevendo simultaneamente disputariam `contas.dat`/`tx_registry.dat`
+(rewrite via temp+rename) e o journal (append).
+
+**Validação experimental (Fase F):**
+- SEM o lock (20 depósitos concorrentes diretos no driver): 11 falharam
+  com `FS=61` (contenção de arquivo), 9 retornaram RC 00 mas o saldo só
+  subiu 2×1000 em vez de 20×1000 — **lost updates**: R$ 180,00 perdidos.
+  Demonstração reproduzível de que o core NÃO é seguro para concorrência.
+- COM o lock (via HTTP): 20/20, 50/50 e 100/100 requisições concorrentes
+  retornaram 201 com reconciliação EXATA do saldo (2700,00 = 100×10,00
+  + 170×10,00). Thundering herd (30 threads, mesmo TX-ID): exatamente
+  1×201 + 29×200 (replay), saldo +5,00 exato.
+- Custo: ~60-95ms por operação serializada (~15-18 op/s). Documentado
+  como limitação, não como defeito.
