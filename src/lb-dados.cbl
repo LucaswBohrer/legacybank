@@ -95,6 +95,11 @@ COPY "copy/constantes.cpy".
 01 WS-FS-JRN          PIC X(2).
 01 WS-FS-TMP          PIC X(2).
 01 WS-RENAME-RC       PIC 9(9) VALUE 0.
+01 WS-RENAME-SRC      PIC X(300).
+01 WS-RENAME-DST      PIC X(300).
+01 WS-DEL-RC          PIC 9(9) VALUE 0.
+01 WS-CFE-RC          PIC 9(9) VALUE 0.
+01 WS-CFE-INFO        PIC X(16).
 
 01 WS-LINE            PIC X(512).
 01 WS-EOF             PIC X(1).
@@ -227,6 +232,55 @@ ENTRY "LB-DATA-INIT" USING LK-DIR.
     STRING FUNCTION TRIM(WS-DATA-DIR) "/auditoria.log"
         DELIMITED BY SIZE INTO WS-PATH-AUD
     END-STRING.
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> LB-DATA-CREATE-FILES: cria os arquivos de dados ausentes
+*> (vazios). Portabilidade (D32): o lb-init criava so o diretorio;
+*> os .dat nasciam de forma preguicosa no primeiro LOAD - o journal
+*> via sequencia 35 -> OUTPUT -> EXTEND, que nao se recuperava no
+*> Windows (FS=35 persistente). Criar aqui, sempre checando a
+*> existencia antes (nunca trunca base existente), garante base
+*> inicializada de forma portatil. Chamada apenas pelo lb-init,
+*> apos LB-DATA-INIT.
+*>--------------------------------------------------------------*
+ENTRY "LB-DATA-CREATE-FILES".
+    CALL "CBL_CHECK_FILE_EXIST" USING WS-PATH-CLI WS-CFE-INFO
+        RETURNING WS-CFE-RC END-CALL.
+    IF WS-CFE-RC = 35
+        OPEN OUTPUT ARQ-CLI
+        CLOSE ARQ-CLI
+    END-IF.
+    CALL "CBL_CHECK_FILE_EXIST" USING WS-PATH-CTA WS-CFE-INFO
+        RETURNING WS-CFE-RC END-CALL.
+    IF WS-CFE-RC = 35
+        OPEN OUTPUT ARQ-CTA
+        CLOSE ARQ-CTA
+    END-IF.
+    CALL "CBL_CHECK_FILE_EXIST" USING WS-PATH-MOV WS-CFE-INFO
+        RETURNING WS-CFE-RC END-CALL.
+    IF WS-CFE-RC = 35
+        OPEN OUTPUT ARQ-MOV
+        CLOSE ARQ-MOV
+    END-IF.
+    CALL "CBL_CHECK_FILE_EXIST" USING WS-PATH-TXR WS-CFE-INFO
+        RETURNING WS-CFE-RC END-CALL.
+    IF WS-CFE-RC = 35
+        OPEN OUTPUT ARQ-TXR
+        CLOSE ARQ-TXR
+    END-IF.
+    CALL "CBL_CHECK_FILE_EXIST" USING WS-PATH-SEQ WS-CFE-INFO
+        RETURNING WS-CFE-RC END-CALL.
+    IF WS-CFE-RC = 35
+        OPEN OUTPUT ARQ-SEQ
+        CLOSE ARQ-SEQ
+    END-IF.
+    CALL "CBL_CHECK_FILE_EXIST" USING WS-PATH-AUD WS-CFE-INFO
+        RETURNING WS-CFE-RC END-CALL.
+    IF WS-CFE-RC = 35
+        OPEN OUTPUT ARQ-AUD
+        CLOSE ARQ-AUD
+    END-IF.
     GOBACK.
 
 *>--------------------------------------------------------------*
@@ -878,10 +932,12 @@ P-CONTA-JOURNAL.
 P-ABRE-APPEND-MOV.
     OPEN EXTEND ARQ-MOV.
     IF WS-FS-MOV = "35"
-        CLOSE ARQ-MOV
+*>      Portabilidade (D32): arquivo inexistente -> OPEN OUTPUT cria
+*>      vazio e segue aberto para escrita sequencial, o que equivale
+*>      ao EXTEND num arquivo novo (LINE SEQUENTIAL). Substitui a
+*>      sequencia CLOSE/OUTPUT/CLOSE/EXTEND, cuja etapa final nao se
+*>      recuperava no Windows (FS=35 persistente).
         OPEN OUTPUT ARQ-MOV
-        CLOSE ARQ-MOV
-        OPEN EXTEND ARQ-MOV
     END-IF.
     IF WS-FS-MOV NOT = "00"
         DISPLAY "ERRO ao abrir movimentos.dat (FS=" WS-FS-MOV ")"
@@ -892,14 +948,37 @@ P-ABRE-APPEND-MOV.
 P-ABRE-APPEND-AUD.
     OPEN EXTEND ARQ-AUD.
     IF WS-FS-AUD = "35"
-        CLOSE ARQ-AUD
+*>      Portabilidade (D32): idem P-ABRE-APPEND-MOV.
         OPEN OUTPUT ARQ-AUD
-        CLOSE ARQ-AUD
-        OPEN EXTEND ARQ-AUD
     END-IF.
     IF WS-FS-AUD NOT = "00"
         DISPLAY "ERRO ao abrir auditoria.log (FS=" WS-FS-AUD ")"
         STOP RUN RETURNING 1
+    END-IF.
+    .
+
+*>--------------------------------------------------------------*
+*> P-RENAME-ATOMICO: renomeia WS-RENAME-SRC -> WS-RENAME-DST.
+*> Portabilidade (D30): CBL_RENAME_FILE usa rename() do C; no
+*> Linux rename() substitui o destino atomicamente, mas no
+*> Windows (UCRT) rename() FALHA se o destino existir. O
+*> caminho feliz (rename direto) e tentado primeiro, ficando
+*> inalterado no Linux; so se ele falhar, remove-se o destino
+*> e tenta-se de novo (trecho exercido apenas no Windows).
+*>--------------------------------------------------------------*
+P-RENAME-ATOMICO.
+    CALL "CBL_RENAME_FILE" USING WS-RENAME-SRC WS-RENAME-DST
+        RETURNING WS-RENAME-RC
+    END-CALL.
+    IF WS-RENAME-RC NOT = 0
+        CALL "CBL_DELETE_FILE" USING WS-RENAME-DST
+            RETURNING WS-DEL-RC
+        END-CALL
+        IF WS-DEL-RC = 0
+            CALL "CBL_RENAME_FILE" USING WS-RENAME-SRC WS-RENAME-DST
+                RETURNING WS-RENAME-RC
+            END-CALL
+        END-IF
     END-IF.
     .
 
@@ -931,9 +1010,9 @@ P-SALVA-CLIENTES.
         WRITE FD-CLI-TMP-LINE
     END-PERFORM.
     CLOSE ARQ-CLI-TMP.
-    CALL "CBL_RENAME_FILE" USING WS-PATH-TMP WS-PATH-CLI
-        RETURNING WS-RENAME-RC
-    END-CALL.
+    MOVE WS-PATH-TMP TO WS-RENAME-SRC.
+    MOVE WS-PATH-CLI TO WS-RENAME-DST.
+    PERFORM P-RENAME-ATOMICO.
     IF WS-RENAME-RC NOT = 0
         DISPLAY "ERRO ao persistir clientes.dat"
         STOP RUN RETURNING 1
@@ -973,9 +1052,9 @@ P-SALVA-CONTAS.
         WRITE FD-CTA-TMP-LINE
     END-PERFORM.
     CLOSE ARQ-CTA-TMP.
-    CALL "CBL_RENAME_FILE" USING WS-PATH-TMP WS-PATH-CTA
-        RETURNING WS-RENAME-RC
-    END-CALL.
+    MOVE WS-PATH-TMP TO WS-RENAME-SRC.
+    MOVE WS-PATH-CTA TO WS-RENAME-DST.
+    PERFORM P-RENAME-ATOMICO.
     IF WS-RENAME-RC NOT = 0
         DISPLAY "ERRO ao persistir contas.dat"
         STOP RUN RETURNING 1
@@ -1009,9 +1088,9 @@ P-SALVA-TXREG.
         WRITE FD-TXR-TMP-LINE
     END-PERFORM.
     CLOSE ARQ-TXR-TMP.
-    CALL "CBL_RENAME_FILE" USING WS-PATH-TMP WS-PATH-TXR
-        RETURNING WS-RENAME-RC
-    END-CALL.
+    MOVE WS-PATH-TMP TO WS-RENAME-SRC.
+    MOVE WS-PATH-TXR TO WS-RENAME-DST.
+    PERFORM P-RENAME-ATOMICO.
     IF WS-RENAME-RC NOT = 0
         DISPLAY "ERRO ao persistir tx_registry.dat"
         STOP RUN RETURNING 1
@@ -1046,9 +1125,9 @@ P-SALVA-SEQ.
     MOVE FUNCTION TRIM(WS-LINE) TO FD-SEQ-TMP-LINE.
     WRITE FD-SEQ-TMP-LINE.
     CLOSE ARQ-SEQ-TMP.
-    CALL "CBL_RENAME_FILE" USING WS-PATH-TMP WS-PATH-SEQ
-        RETURNING WS-RENAME-RC
-    END-CALL.
+    MOVE WS-PATH-TMP TO WS-RENAME-SRC.
+    MOVE WS-PATH-SEQ TO WS-RENAME-DST.
+    PERFORM P-RENAME-ATOMICO.
     IF WS-RENAME-RC NOT = 0
         DISPLAY "ERRO ao persistir sequencia.dat"
         STOP RUN RETURNING 1

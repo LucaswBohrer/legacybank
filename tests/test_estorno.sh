@@ -220,7 +220,7 @@ SAQUE;TX-G02;10000001;100.00
 TRANSFERENCIA;TX-G03;10000001;10000002;50.00
 EOF
 lote "$TDIR/g01.txt" >/dev/null
-python3 - "$TDIR/tx_registry.dat" <<'PY'
+"$PYBIN" - "$TDIR/tx_registry.dat" <<'PY'
 import re, sys
 p = sys.argv[1]
 out = []

@@ -76,7 +76,7 @@ assert_eq "destino intacto" "1000.00" "$(saldo 10000002)"
 
 echo "--- indice: volume com colisoes forca encadeamento ---"
 # 3000 TXs sequenciais: exercita insercao/lookup em massa no indice
-python3 - "$TDIR/vol.txt" <<'PYEOF'
+"$PYBIN" - "$TDIR/vol.txt" <<'PYEOF'
 import sys
 with open(sys.argv[1], "w") as f:
     for i in range(1, 3001):

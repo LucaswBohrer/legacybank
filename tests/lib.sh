@@ -6,6 +6,13 @@ PASS=0
 FAIL=0
 FAILED_CASES=""
 
+# Interpretador Python portavel: no Windows/MSYS2 o comando pode ser
+# `python` em vez de `python3`. Exportado para uso com xargs.
+if [ -z "${PYBIN:-}" ]; then
+    PYBIN="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)"
+fi
+export PYBIN
+
 assert_eq() {
     # assert_eq "descricao" "esperado" "obtido"
     local desc="$1" expected="$2" actual="$3"

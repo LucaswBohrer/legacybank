@@ -14,7 +14,7 @@ trap 'rm -rf "$TDIR"' EXIT
 LOTE="${LOTE_100K:-/tmp/lote100k.txt}"
 if [ ! -f "$LOTE" ]; then
     echo "gerando lote de 100k transacoes..."
-    python3 - "$LOTE" <<'PYEOF'
+    "$PYBIN" - "$LOTE" <<'PYEOF'
 import random, sys
 random.seed(42)
 out = sys.argv[1]
@@ -53,7 +53,7 @@ echo "saldo final 10000001: $s1"
 echo "saldo final 10000002: $s2"
 
 # consistencia: soma dos saldos = inicial + depositos - saques - tarifas
-python3 - "$LOTE" "$s1" "$s2" <<'PYEOF'
+"$PYBIN" - "$LOTE" "$s1" "$s2" <<'PYEOF'
 import sys
 lote, s1, s2 = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
 dep = saq = tra = 0.0
