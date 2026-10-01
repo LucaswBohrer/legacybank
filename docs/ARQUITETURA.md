@@ -1,8 +1,9 @@
 # ARQUITETURA — LEGACYBANK
 
 Sistema bancário educacional com o núcleo 100% em COBOL (GnuCOBOL 3.2.0,
-formato livre). Sem camada web nesta entrega: a operação é via menu
-interativo (`legacybank`) e processamento em lote (`lb-lote`).
+formato livre). Operação via menu interativo (`legacybank`),
+processamento em lote (`lb-lote`), API REST (`api/lbapi.py`, TESTE 4)
+e web banking (`web/`, TESTE 5).
 
 ## Diagrama de módulos
 
@@ -98,3 +99,20 @@ Cada transação carrega um `TX-ID`. O `tx_registry.dat` mapeia `TX-ID → resul
 
 - `scripts/build.sh`, `tests/*.sh`: ferramentas auxiliares de build e teste (shell). Exigência: só automação, nunca lógica de negócio.
 - `tests/test_carga.sh` usa Python apenas para **gerar** o lote de 100k linhas (dados de teste); o processamento é 100% COBOL.
+- `api/lbapi.py` (TESTE 4) e `web/` (TESTE 5): camadas de integração e apresentação. Exigência: nenhuma regra financeira — saldo, tarifas, validações, RCs, idempotência e estorno são decididos exclusivamente pelo core COBOL; Python/React apenas transportam e exibem.
+
+## Web banking (TESTE 5)
+
+```
+Browser
+  → React + TypeScript + Vite (web/)
+  → REST /api/v1 (api/lbapi.py, Python stdlib)
+  → bin/lb-api (driver COBOL, subprocesso por operação)
+  → core COBOL (única autoridade financeira)
+  → arquivos LINE SEQUENTIAL (journal/persistência/auditoria)
+```
+
+- O frontend nunca calcula dinheiro com `float`: valores transitam como strings decimais e centavos inteiros.
+- `POST /batch` executa `bin/lb-lote` sob o lock global da API; o Python só transporta o texto e interpreta o relatório.
+- Em produção local a API serve `web/dist` (build estático); em dev, o Vite faz proxy de `/api` para `127.0.0.1:8123` (`scripts/dev-web.sh`).
+- Deploy gratuito (Docker + Render, `Dockerfile`/`render.yaml`): container único com GnuCOBOL 3.2.0 compilado do fonte, API e frontend estático; filesystem efêmero → **modo demo** (dados somem em restart/redeploy), sinalizado na UI.

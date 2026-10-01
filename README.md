@@ -169,6 +169,20 @@ curl -X POST localhost:8123/api/v1/transactions/deposit \
 Manual completo em [`docs/API.md`](docs/API.md): contrato, erros,
 idempotência, concorrência, falhas e limites honestos.
 
+## Web banking
+
+Frontend React + TypeScript + Vite sobre a API REST — web banking
+completo sem duplicar regra financeira (o core COBOL decide tudo).
+
+```bash
+./scripts/dev-web.sh     # API + Vite dev (proxy /api → 127.0.0.1:8123)
+# http://localhost:5173
+```
+
+Páginas: dashboard, clientes, contas, extrato, transações, estornos,
+auditoria, lote e sistema. Deploy gratuito via Docker (`Dockerfile` +
+`render.yaml`); no plano gratuito o filesystem é efêmero (modo demo).
+
 ## Status
 
 Funcional e testado em Linux x86_64 (GnuCOBOL 3.2.0, Python 3 stdlib).

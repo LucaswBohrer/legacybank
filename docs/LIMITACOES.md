@@ -78,3 +78,54 @@ Transações criadas antes do DETALHE enriquecido (D21) são estornadas via
 de compatibilidade/migração (D23): transações novas usam o índice hash
 O(1). Em bases com milhões de movimentos e muitas reversões legadas,
 considerar migração assistida do registry antigo para o formato D21.
+
+## L10 — Portabilidade Windows/MSYS2 (D29–D32, 2026-10-01)
+
+**Status:** dependências de shell/SO eliminadas do produto; validação
+real no Windows/MSYS2-UCRT64 pendente (executada pelo Lucas).
+
+Corrigido:
+- `lb-init` não usa mais `CALL "SYSTEM"` (caía no cmd.exe no Windows);
+  cria diretórios via `CBL_CREATE_DIR` (D29) **e** cria os 6 arquivos
+  de dados ausentes via `LB-DATA-CREATE-FILES` (D32, sem truncar).
+- `P-RENAME-ATOMICO`: `rename()` do UCRT falha com destino existente;
+  fallback delete+rename só nesse caso (D30). No Linux o caminho é o
+  rename atômico de antes.
+- Recuperação 35 do journal/auditoria simplificada para `OPEN OUTPUT`
+  único (D32): equivale ao EXTEND em arquivo novo e evita a sequência
+  de 4 passos que não se recuperava no Windows.
+- `api/lbapi.py` resolve `lb-api.exe` no Windows (D31).
+
+Limites honestos restantes no Windows:
+- **MSYS2 converte argv, não env vars:** caminhos absolutos estilo
+  `/tmp/...` passados como *argumento* chegam convertidos ao .exe, mas
+  em *variável de ambiente* (`LBAPI_DATA_DIR`) o Python nativo vê o
+  caminho cru. Por isso os testes usam diretório relativo.
+- **Concorrência entre processos:** no Windows o bloqueio de arquivo é
+  mais estrito que no Linux; o desenho continua sendo um escritor por
+  vez (lock da API, D28). CLI e API concorrentes nunca foram suportados.
+- **Acentos no terminal:** mensagens com ç/ã podem sair com encoding
+  trocado no cmd.exe; cosmético, não afeta dados (testes usam `R$`).
+- `scripts/benchmark.sh` ainda assume `/tmp` (ferramenta de dev, fora
+  da suíte).
+
+## L05 — Web banking é educacional, não production-ready
+
+O TESTE 5 entrega um web banking funcional, mas: sem autenticação
+(qualquer um com acesso à URL opera tudo), sem HTTPS próprio (depende
+do provedor), sem rate limiting, sem CSRF, API escuta em `127.0.0.1`
+por desenho local. Não expor sem uma camada de auth na frente.
+
+## L06 — Deploy gratuito = filesystem efêmero (modo demo)
+
+No plano gratuito (Render e similares) o disco é efêmero: cada
+restart/redeploy zera clientes, contas e transações. A UI sinaliza
+"modo demo". Para persistência real seria preciso disco persistente
+(plano pago) ou backend de dados externo — fora do escopo educacional.
+
+## L07 — Quirk GnuCOBOL 3.2.0: ENTRY no fim do programa
+
+Documentado em D34: novas ENTRYs devem ficar no meio do arquivo
+(antes dos parágrafos auxiliares), nunca como última instrução da
+`PROCEDURE DIVISION`. Válido para a versão 3.2.0; outras versões não
+foram testadas.

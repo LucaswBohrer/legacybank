@@ -34,8 +34,10 @@ Variáveis de ambiente:
 | Variável         | Padrão              | Descrição                              |
 |------------------|---------------------|----------------------------------------|
 | `LBAPI_DATA_DIR` | `./data`            | Diretório de dados do LEGACYBANK       |
-| `LBAPI_PORT`     | `8123`              | Porta (somente 127.0.0.1)              |
+| `LBAPI_HOST`     | `127.0.0.1`         | Interface de escuta (`0.0.0.0` no Docker) |
+| `LBAPI_PORT`     | `8123`              | Porta (`$PORT` como fallback no deploy) |
 | `LBAPI_BIN`      | `../bin/lb-api`     | Caminho do driver COBOL                |
+| `LBAPI_WEB_DIR`  | `../web/dist`       | Frontend estático servido pela API     |
 | `LBAPI_TIMEOUT`  | `30`                | Timeout por operação, em segundos      |
 
 A API escuta apenas em `127.0.0.1` por desenho (integração local).
@@ -55,6 +57,18 @@ Base: `/api/v1`
 | POST   | `/transactions/withdraw`                   | Saque (+ tarifa R$ 1,50)     |
 | POST   | `/transactions/transfer`                   | Transferência (+ R$ 2,00)    |
 | POST   | `/transactions/reversal`                   | Estorno                      |
+| GET    | `/dashboard`                              | Agregados (TESTE 5)          |
+| GET    | `/customers`                              | Lista clientes (TESTE 5)     |
+| GET    | `/customers/{id}`                         | Um cliente (TESTE 5)         |
+| POST   | `/customers`                              | Novo cliente (TESTE 5)       |
+| GET    | `/accounts`                               | Lista contas `?status=` (TESTE 5) |
+| POST   | `/accounts`                               | Nova conta (TESTE 5)         |
+| POST   | `/accounts/{id}/block`                    | Bloqueia (TESTE 5)           |
+| POST   | `/accounts/{id}/unblock`                  | Desbloqueia (TESTE 5)        |
+| POST   | `/accounts/{id}/close`                    | Encerra (TESTE 5)            |
+| GET    | `/transactions`                           | Lista `?account=&result=&limit=` (TESTE 5) |
+| GET    | `/audit`                                  | Auditoria `?limit=` (TESTE 5)|
+| POST   | `/batch`                                  | Lote texto (TESTE 5)         |
 
 ### Formato de valores
 
@@ -96,6 +110,44 @@ curl -X POST localhost:8123/api/v1/transactions/reversal \
   -d '{"tx_id":"API-REV-1","original_tx_id":"API-001"}'
 # → 201 {"status":"accepted","rc":0,"rc_message":"Estorno efetuado."}
 ```
+
+### Endpoints do TESTE 5 (web banking)
+
+```bash
+# dashboard
+curl localhost:8123/api/v1/dashboard
+# → 200 {"customers":1,"accounts":1,"accounts_active":1,
+#        "accounts_blocked":0,"accounts_closed":0,
+#        "total_balance_cents":100000,"total_balance":"1000.00",
+#        "transactions":1,"movements":1,"recent":[...]}
+
+# novo cliente
+curl -X POST localhost:8123/api/v1/customers \
+  -d '{"name":"Ana","cpf":"12345678901","email":"ana@x.com"}'
+# → 201 {"id":"C000001","name":"Ana",...}
+# → 422 {"rc":5,"message":"CPF invalido."} (regra do core)
+
+# nova conta
+curl -X POST localhost:8123/api/v1/accounts \
+  -d '{"customer_id":"C000001","type":"CC"}'
+# → 201 {"account":"10000001",...}
+
+# bloquear / desbloquear / encerrar
+curl -X POST localhost:8123/api/v1/accounts/10000001/block
+# → 200 {"account":"10000001","status":"B",...}
+# → 422 {"rc":9,...} ao encerrar conta com saldo != 0
+
+# lote (text/plain)
+curl -X POST localhost:8123/api/v1/batch --data-binary @lote.txt
+# → 200 {"processed":3,"accepted":2,"rejected":0,"duplicates":0,
+#        "invalid":1,"errors":["Linha 0000003: operacao desconhecida."],
+#        "report":"..."}
+```
+
+O `POST /batch` grava o corpo num temporário dentro do diretório de
+dados, executa `bin/lb-lote` sob o mesmo lock global das demais
+operações e remove o temporário. O Python só transporta e interpreta
+o relatório — nenhuma regra do lote é reimplementada.
 
 ## Contrato de erros (D27)
 

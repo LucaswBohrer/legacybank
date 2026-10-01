@@ -449,3 +449,128 @@ escrevendo simultaneamente disputariam `contas.dat`/`tx_registry.dat`
   1×201 + 29×200 (replay), saldo +5,00 exato.
 - Custo: ~60-95ms por operação serializada (~15-18 op/s). Documentado
   como limitação, não como defeito.
+
+## D29 — Portabilidade: lb-init sem shell (VALIDADA 2026-10-01)
+
+**Problema:** `lb-init` usava `CALL "SYSTEM"` com `mkdir -p '<dir>'`.
+No Windows (MSYS2/UCRT64) o `CALL "SYSTEM"` da libcob usa o `system()`
+do MSVCRT, que despacha para o **cmd.exe** (documentado no fonte da
+libcob, `common.c`: "All known _WIN32 implementations use MSVCRT's
+system() which passes the given commandline as parameter to cmd").
+O cmd.exe não conhece `-p` nem aspas simples → "A sintaxe do comando
+está incorreta." (rc=1) → init abortava antes de criar `data/` →
+todos os binários falhavam em cascata com FS=35.
+
+**Decisão:** eliminar o shell do produto. `lb-init` agora implementa
+semântica `mkdir -p` em COBOL puro: normaliza `\`→`/`, caminha pelos
+prefixos do caminho e chama `CBL_CREATE_DIR` por nível;
+`CBL_CHECK_FILE_EXIST` distingue "já existia" (ok) de erro real.
+Sem shell, não há mais vetor de shell injection pelo caminho.
+
+**Alternativa descartada:** detectar SO e montar comando cmd.exe
+(`mkdir` sem `-p`, aspas duplas) — manteria dependência de shell,
+com outra sintaxe por plataforma, e o risco de injeção.
+
+## D30 — Portabilidade: rename com destino existente (Windows)
+
+**Problema:** `CBL_RENAME_FILE` chama `rename()` do C diretamente
+(fonte da libcob, `fileio.c`). No Linux `rename()` substitui o destino
+atomicamente; no Windows (UCRT) `rename()` **falha se o destino
+existir**. Todo `P-SALVA-*` (rewrite via temp+rename) falharia no
+Windows a partir do segundo SAVE ("ERRO ao persistir X.dat").
+
+**Decisão:** parágrafo `P-RENAME-ATOMICO` em `lb-dados.cbl`: tenta o
+rename direto primeiro (caminho feliz do Linux **inalterado**); só se
+falhar, remove o destino com `CBL_DELETE_FILE` e tenta de novo
+(trecho exercido apenas no Windows). Os 4 `P-SALVA-*` usam o helper.
+
+## D31 — Portabilidade: API e harness sem suposições Unix
+
+**Problemas encontrados na auditoria:**
+- `api/lbapi.py`: `BIN` padrão `../bin/lb-api` (sem `.exe`) não existe
+  como arquivo no Windows → `CoreUnavailable` → tudo 503; e
+  `os.access(X_OK)` não tem o mesmo sentido no Windows.
+- `tests/test_api.sh`: dependia de `curl` (33 usos; pode não existir
+  no MSYS2) e usava `D=/tmp/...` com `LBAPI_DATA_DIR` via variável
+  de ambiente — o MSYS2 converte argv, **não** env vars, então o
+  Python nativo veria outro diretório que o .exe.
+- Nome do interpretador: `python3` pode não existir no Windows
+  (instalador python.org cria `python`).
+
+**Decisões:**
+- `_resolve_bin()`: no Windows tenta `BIN + ".exe"`; `_bin_executable()`:
+  no Windows existir basta, no Unix mantém `X_OK`.
+- `tests/httpc.py` (stdlib) substitui o curl no harness; `D` relativo
+  ao repo (`./test-tmp-lbapi-$$`); `PYBIN` em `tests/lib.sh`
+  (`python3` → `python` fallback) usado por todos os testes.
+- Nada disso toca regra financeira, formatos ou contratos: é harness.
+
+## D32 — Portabilidade: FS=35 do journal e init que inicializa de verdade (2026-10-01)
+
+**Causa raiz do `ERRO ao abrir movimentos.dat (FS=35)` no Windows:**
+era cascata do `lb-init` quebrado (D29), mas com um segundo fator.
+O `lb-init` abortava no `mkdir` antes do `LB-DATA-INIT`; com `data/`
+criado manualmente e vazio, o primeiro `legacybank` caia em
+`P-ABRE-APPEND-MOV` com o arquivo genuinamente inexistente (o 35 vem
+do `access(F_OK)` no open da libcob, igual nas duas plataformas).
+No Linux a recuperacao `35 -> CLOSE -> OUTPUT -> CLOSE -> EXTEND`
+se auto-cura (validado empiricamente); no Windows o FS=35 persistia
+— consistente com o quirk de `OPEN EXTEND` em WIN32 documentado no
+proprio fonte da libcob (`fileio.c`: "Problem on WIN32 ... if file
+isn't there").
+
+**Decisões:**
+- `lb-init` agora inicializa de verdade: nova `ENTRY "LB-DATA-CREATE-FILES"`
+  cria os 6 arquivos ausentes (vazios) via `OPEN OUTPUT`, sempre com
+  `CBL_CHECK_FILE_EXIST` antes — **nunca trunca** base existente
+  (re-init idempotente, testado).
+- A recuperacao 35 de `P-ABRE-APPEND-MOV`/`P-ABRE-APPEND-AUD` foi
+  simplificada para um unico `OPEN OUTPUT`: num arquivo inexistente,
+  para LINE SEQUENTIAL, isso equivale ao EXTEND (escrita sequencial
+  a partir do vazio) e elimina a danca de 4 passos que quebrava no
+  Windows. `LB-MOV-FIND-TX` continua fechando e reabrindo em EXTEND
+  apos leitura, sem mudanca.
+- Arquivo vazio ≡ arquivo ausente em todos os `P-CARREGA-*` (35 pula,
+  vazio da AT END imediato): sem mudanca de semantica no Linux.
+
+## D33 — TESTE 5: web banking sobre o core (2026-10-01)
+
+**Decisão:** camada web completa (React + TypeScript + Vite) sobre a
+API REST do TESTE 4, sem duplicar regra financeira. Novas ENTRYs em
+`lb-consulta.cbl` (`CONS-LISTA-CLIENTES-API`, `CONS-LISTA-CONTAS-API`,
+`CONS-LISTA-TXS-API`, `CONS-LISTA-AUDIT-API`, `CONS-DASHBOARD-API`)
+leem os arquivos persistentes diretamente e emitem formato
+máquina-legível (`CLI-REC:`, `CTA-REC:`, `TXR-REC:`, `AUD-REC:`,
+`DB-*:`). Novas operações no driver `lb-api.cbl` (`LIST-CLIENTS`,
+`LIST-ACCOUNTS`, `LIST-TXS`, `LIST-AUDIT`, `DASHBOARD`, `NEW-CLIENT`,
+`NEW-ACCOUNT`, `BLOCK`, `UNBLOCK`, `CLOSE-ACCT`) seguem o padrão
+INIT/LOAD → ENTRY existente → SAVE. Novos endpoints REST
+(`/dashboard`, `/customers`, `/accounts`, `/transactions`,
+`/audit`, `POST /batch`); o batch executa `bin/lb-lote` sob o lock
+global da API — o Python só transporta o texto e interpreta o
+relatório.
+
+**Verificação:** suíte 72/72 na API (36 novos); regressão total verde.
+
+## D34 — Quirk GnuCOBOL: ENTRY nova no fim do programa (2026-10-01)
+
+**Sintoma:** após anexar as 5 ENTRYs do TESTE 5 no fim de
+`lb-consulta.cbl`, `STATEMENT` passou a vazar para a ENTRY seguinte
+(`CLI-REC:` após `STMT-MOV:`), `STMT-CURRENT` sumia e houve até
+segfault. Isolamento: driver novo + consulta antiga = OK; driver
+antigo + consulta nova = quebra. Testes mínimos: ENTRY nova com
+`GOBACK` no fim quebra o retorno das ENTRYs anteriores; sem `GOBACK`
+as ENTRYs novas caem em cascata entre si.
+
+**Causa (quirk real do GnuCOBOL 3.2.0):** a última ENTRY física do
+programa não pode terminar com `GOBACK` como última instrução da
+`PROCEDURE DIVISION` — o `GOBACK` das ENTRYs anteriores corrompe;
+e sem `GOBACK` o retorno implícito não segura a chamada via ENTRY.
+
+**Decisão:** ENTRYs novas ficam no MEIO do arquivo (após as ENTRYs
+existentes, antes dos parágrafos auxiliares), nunca no fim;
+parágrafos auxiliares continuam após todas as ENTRYs, no final.
+Comentário de alerta no fonte + lição em `~/AGENTS.md`.
+
+**Verificação:** `STATEMENT` completo, listagens e dashboard OK;
+suíte verde.

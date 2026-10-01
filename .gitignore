@@ -13,3 +13,11 @@ relatorio_lote_*.txt
 # Temporarios do sistema
 *.tmp
 *~
+
+# Python
+__pycache__/
+*.pyc
+
+# Frontend (build local; deploy usa o proprio Dockerfile)
+web/node_modules/
+web/dist/
