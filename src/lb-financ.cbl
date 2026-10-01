@@ -1,0 +1,388 @@
+>>SOURCE FORMAT IS FREE
+*>==============================================================*
+*> LEGACYBANK - LB-FINANC
+*> Regras financeiras: deposito, saque e transferencia.
+*> Protocolo de toda operacao (atomicidade):
+*>   1. validar tudo (valor, contas, status, saldo, idempotencia);
+*>   2. somente apos todas as validacoes, mutar saldos em memoria;
+*>   3. gravar journal + registro de idempotencia + auditoria.
+*> Nenhuma operacao rejeitada altera saldo (nem parcialmente).
+*> Este modulo nao faz DISPLAY; devolve codigo de erro + mensagem.
+*>==============================================================*
+IDENTIFICATION DIVISION.
+PROGRAM-ID. LB-FINANC.
+
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+COPY "copy/constantes.cpy".
+
+01 WS-FOUND           PIC X(1).
+01 WS-DATAHORA        PIC X(19).
+01 WS-DATA-10         PIC X(10).
+01 WS-TOTAL           PIC 9(13).
+01 WS-SEQ-N           PIC 9(9).
+01 WS-ID24            PIC X(24).
+01 WS-RC-TX           PIC 9(2).
+01 WS-UPD-RC          PIC 9(2).
+01 WS-QUAL            PIC X(10).
+01 WS-AUD-TXT         PIC X(200).
+01 WS-VAL-EDT         PIC $$$,$$$,$$9.99.
+
+01 WS-CTA-REC.
+   COPY "copy/contas.cpy".
+01 WS-CTA-DEST-REC.
+   COPY "copy/contas.cpy".
+01 WS-MOV-REC.
+   COPY "copy/movimentos.cpy".
+01 WS-TXR-REC.
+   COPY "copy/txreg.cpy".
+
+LINKAGE SECTION.
+01 LK-TXID            PIC X(24).
+01 LK-CONTA           PIC X(8).
+01 LK-DESTINO         PIC X(8).
+01 LK-VALOR           PIC 9(13).
+01 LK-RC              PIC 9(2).
+01 LK-MSG             PIC X(80).
+
+PROCEDURE DIVISION.
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> FIN-DEPOSITO: credita VALOR (centavos) na CONTA.
+*>--------------------------------------------------------------*
+ENTRY "FIN-DEPOSITO" USING LK-TXID LK-CONTA LK-VALOR LK-RC LK-MSG.
+    PERFORM P-INICIO-OP.
+    PERFORM P-VERIFICA-DUPLICADA.
+    IF LK-RC NOT = 0
+        GOBACK
+    END-IF.
+    IF LK-VALOR <= 0
+        MOVE 5 TO LK-RC
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    PERFORM P-BUSCA-CONTA.
+    IF LK-RC NOT = 0
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    ADD LK-VALOR TO CTA-SALDO OF WS-CTA-REC.
+    CALL "LB-CTA-UPD" USING WS-CTA-REC WS-UPD-RC.
+    IF WS-UPD-RC NOT = 0
+        PERFORM P-ERRO-FATAL
+    END-IF.
+    PERFORM P-MOV-DEPOSITO.
+    PERFORM P-TX-OK-DEPOSITO.
+    PERFORM P-AUDITA-OK.
+    MOVE 0 TO LK-RC.
+    MOVE "Deposito efetuado." TO LK-MSG.
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> FIN-SAQUE: debita VALOR + tarifa (R$ 1,50) da CONTA.
+*>--------------------------------------------------------------*
+ENTRY "FIN-SAQUE" USING LK-TXID LK-CONTA LK-VALOR LK-RC LK-MSG.
+    PERFORM P-INICIO-OP.
+    PERFORM P-VERIFICA-DUPLICADA.
+    IF LK-RC NOT = 0
+        GOBACK
+    END-IF.
+    IF LK-VALOR <= 0
+        MOVE 5 TO LK-RC
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    PERFORM P-BUSCA-CONTA.
+    IF LK-RC NOT = 0
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    COMPUTE WS-TOTAL = LK-VALOR + TARIFA-SAQUE-CENTAVOS.
+    IF CTA-SALDO OF WS-CTA-REC < WS-TOTAL
+        MOVE 4 TO LK-RC
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    SUBTRACT WS-TOTAL FROM CTA-SALDO OF WS-CTA-REC.
+    CALL "LB-CTA-UPD" USING WS-CTA-REC WS-UPD-RC.
+    IF WS-UPD-RC NOT = 0
+        PERFORM P-ERRO-FATAL
+    END-IF.
+    PERFORM P-MOV-SAQUE.
+    PERFORM P-MOV-TARIFA-SAQUE.
+    PERFORM P-TX-OK-SAQUE.
+    PERFORM P-AUDITA-OK.
+    MOVE 0 TO LK-RC.
+    MOVE "Saque efetuado." TO LK-MSG.
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> FIN-TRANSFERENCIA: debita VALOR + tarifa (R$ 2,00) da origem
+*> e credita VALOR no destino. Debito e credito ocorrem na mesma
+*> unidade de validacao: impossivel debitar sem creditar.
+*>--------------------------------------------------------------*
+ENTRY "FIN-TRANSFERENCIA"
+        USING LK-TXID LK-CONTA LK-DESTINO LK-VALOR LK-RC LK-MSG.
+    PERFORM P-INICIO-OP.
+    PERFORM P-VERIFICA-DUPLICADA.
+    IF LK-RC NOT = 0
+        GOBACK
+    END-IF.
+    IF LK-VALOR <= 0
+        MOVE 5 TO LK-RC
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    IF FUNCTION TRIM(LK-CONTA) = FUNCTION TRIM(LK-DESTINO)
+        MOVE 11 TO LK-RC
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    PERFORM P-BUSCA-CONTA.
+    IF LK-RC NOT = 0
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    PERFORM P-BUSCA-DESTINO.
+    IF LK-RC NOT = 0
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    COMPUTE WS-TOTAL = LK-VALOR + TARIFA-TRANSFER-CENTAVOS.
+    IF CTA-SALDO OF WS-CTA-REC < WS-TOTAL
+        MOVE 4 TO LK-RC
+        PERFORM P-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    SUBTRACT WS-TOTAL FROM CTA-SALDO OF WS-CTA-REC.
+    ADD LK-VALOR TO CTA-SALDO OF WS-CTA-DEST-REC.
+    CALL "LB-CTA-UPD" USING WS-CTA-REC WS-UPD-RC.
+    IF WS-UPD-RC NOT = 0
+        PERFORM P-ERRO-FATAL
+    END-IF.
+    CALL "LB-CTA-UPD" USING WS-CTA-DEST-REC WS-UPD-RC.
+    IF WS-UPD-RC NOT = 0
+        PERFORM P-ERRO-FATAL
+    END-IF.
+    PERFORM P-MOV-TRANSFER.
+    PERFORM P-MOV-TARIFA-TRANSFER.
+    PERFORM P-TX-OK-TRANSFER.
+    PERFORM P-AUDITA-OK.
+    MOVE 0 TO LK-RC.
+    MOVE "Transferencia efetuada." TO LK-MSG.
+    GOBACK.
+
+*>==============================================================*
+*> Rotinas internas
+*>==============================================================*
+P-INICIO-OP.
+    MOVE 0 TO LK-RC.
+    MOVE SPACES TO LK-MSG.
+    CALL "LB-NOW" USING WS-DATAHORA.
+    .
+
+*> Invariante violada (conta sumiu da memoria entre FIND e UPD):
+*> aborta em vez de corromper o razão. Nenhuma escrita desta
+*> operacao chegou ao journal ou aos arquivos.
+P-ERRO-FATAL.
+    DISPLAY "ERRO FATAL: inconsistencia interna no nucleo financeiro."
+    DISPLAY "Operacao abortada antes de qualquer escrita."
+    STOP RUN RETURNING 3.
+    .
+
+P-BUSCA-CONTA.
+    MOVE FUNCTION TRIM(LK-CONTA) TO WS-ID24.
+    CALL "LB-CTA-FIND" USING WS-ID24 WS-CTA-REC WS-FOUND.
+    IF WS-FOUND = "N"
+        MOVE 1 TO LK-RC
+        EXIT PARAGRAPH
+    END-IF.
+    EVALUATE CTA-STATUS OF WS-CTA-REC
+        WHEN "B" MOVE 2 TO LK-RC
+        WHEN "E" MOVE 3 TO LK-RC
+        WHEN OTHER MOVE 0 TO LK-RC
+    END-EVALUATE.
+    .
+
+P-BUSCA-DESTINO.
+    MOVE FUNCTION TRIM(LK-DESTINO) TO WS-ID24.
+    CALL "LB-CTA-FIND" USING WS-ID24 WS-CTA-DEST-REC WS-FOUND.
+    IF WS-FOUND = "N"
+        MOVE 1 TO LK-RC
+        EXIT PARAGRAPH
+    END-IF.
+    EVALUATE CTA-STATUS OF WS-CTA-DEST-REC
+        WHEN "B" MOVE 2 TO LK-RC
+        WHEN "E" MOVE 3 TO LK-RC
+        WHEN OTHER MOVE 0 TO LK-RC
+    END-EVALUATE.
+    .
+
+P-VERIFICA-DUPLICADA.
+    CALL "LB-TX-FIND" USING LK-TXID WS-TXR-REC WS-FOUND.
+    IF WS-FOUND = "S"
+        MOVE 6 TO LK-RC
+        MOVE SPACES TO LK-MSG
+        STRING "Transacao duplicada (resultado anterior: "
+            DELIMITED BY SIZE
+            FUNCTION TRIM(TXR-RESULTADO OF WS-TXR-REC)
+            DELIMITED BY SIZE
+            ")." DELIMITED BY SIZE
+            INTO LK-MSG
+        END-STRING
+        MOVE SPACES TO WS-AUD-TXT
+        STRING "DUPLICADA " DELIMITED BY SIZE
+            FUNCTION TRIM(LK-TXID) DELIMITED BY SIZE
+            INTO WS-AUD-TXT
+        END-STRING
+        CALL "LB-AUDIT" USING WS-AUD-TXT
+    END-IF.
+    .
+
+P-FIM-REJEITADA.
+    PERFORM P-DESCREVE-ERRO.
+    PERFORM P-REGISTRA-REJEITADA.
+    PERFORM P-AUDITA-REJEITADA.
+    .
+
+P-DESCREVE-ERRO.
+    EVALUATE LK-RC
+        WHEN 1 MOVE "Conta inexistente." TO LK-MSG
+        WHEN 2 MOVE "Conta bloqueada." TO LK-MSG
+        WHEN 3 MOVE "Conta encerrada." TO LK-MSG
+        WHEN 4 MOVE "Saldo insuficiente." TO LK-MSG
+        WHEN 5 MOVE "Valor invalido (deve ser positivo)." TO LK-MSG
+        WHEN 6 MOVE "Transacao duplicada." TO LK-MSG
+        WHEN 11 MOVE "Origem e destino nao podem ser iguais." TO LK-MSG
+        WHEN OTHER MOVE "Erro interno." TO LK-MSG
+    END-EVALUATE.
+    .
+
+P-REGISTRA-REJEITADA.
+    MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
+    MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
+    MOVE "REJEITADA" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE FUNCTION TRIM(LK-MSG) TO TXR-DETALHE OF WS-TXR-REC.
+    CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
+    .
+
+P-AUDITA-REJEITADA.
+    MOVE SPACES TO WS-AUD-TXT
+    STRING "REJEITADA " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXID) DELIMITED BY SIZE
+        " conta=" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-CONTA) DELIMITED BY SIZE
+        " motivo=" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-MSG) DELIMITED BY SIZE
+        INTO WS-AUD-TXT
+    END-STRING.
+    CALL "LB-AUDIT" USING WS-AUD-TXT.
+    .
+
+P-AUDITA-OK.
+    MOVE SPACES TO WS-AUD-TXT
+    STRING "OK " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXID) DELIMITED BY SIZE
+        " conta=" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-CONTA) DELIMITED BY SIZE
+        INTO WS-AUD-TXT
+    END-STRING.
+    CALL "LB-AUDIT" USING WS-AUD-TXT.
+    .
+
+P-NOVO-MOV.
+    MOVE "MOV" TO WS-QUAL.
+    CALL "LB-SEQ-NEXT" USING WS-QUAL WS-SEQ-N.
+    MOVE WS-SEQ-N TO MOV-SEQ OF WS-MOV-REC.
+    MOVE WS-DATAHORA TO MOV-DATAHORA OF WS-MOV-REC.
+    MOVE FUNCTION TRIM(LK-TXID) TO MOV-TX-ID OF WS-MOV-REC.
+    .
+
+P-MOV-DEPOSITO.
+    PERFORM P-NOVO-MOV.
+    MOVE "DEPOSITO" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE FUNCTION TRIM(LK-CONTA) TO MOV-CONTA OF WS-MOV-REC.
+    MOVE SPACES TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE LK-VALOR TO MOV-VALOR OF WS-MOV-REC.
+    MOVE "Deposito em conta" TO MOV-DESCRICAO OF WS-MOV-REC.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
+    .
+
+P-MOV-SAQUE.
+    PERFORM P-NOVO-MOV.
+    MOVE "SAQUE" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE FUNCTION TRIM(LK-CONTA) TO MOV-CONTA OF WS-MOV-REC.
+    MOVE SPACES TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE LK-VALOR TO MOV-VALOR OF WS-MOV-REC.
+    MOVE "Saque em conta" TO MOV-DESCRICAO OF WS-MOV-REC.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
+    .
+
+P-MOV-TARIFA-SAQUE.
+    PERFORM P-NOVO-MOV.
+    MOVE "TARIFA" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE FUNCTION TRIM(LK-CONTA) TO MOV-CONTA OF WS-MOV-REC.
+    MOVE SPACES TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE TARIFA-SAQUE-CENTAVOS TO MOV-VALOR OF WS-MOV-REC.
+    MOVE "Tarifa de saque" TO MOV-DESCRICAO OF WS-MOV-REC.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
+    .
+
+P-MOV-TRANSFER.
+    PERFORM P-NOVO-MOV.
+    MOVE "TRANSFERENCIA" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE FUNCTION TRIM(LK-CONTA) TO MOV-CONTA OF WS-MOV-REC.
+    MOVE FUNCTION TRIM(LK-DESTINO) TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE LK-VALOR TO MOV-VALOR OF WS-MOV-REC.
+    MOVE "Transferencia entre contas" TO MOV-DESCRICAO OF WS-MOV-REC.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
+    .
+
+P-MOV-TARIFA-TRANSFER.
+    PERFORM P-NOVO-MOV.
+    MOVE "TARIFA" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE FUNCTION TRIM(LK-CONTA) TO MOV-CONTA OF WS-MOV-REC.
+    MOVE SPACES TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE TARIFA-TRANSFER-CENTAVOS TO MOV-VALOR OF WS-MOV-REC.
+    MOVE "Tarifa de transferencia" TO MOV-DESCRICAO OF WS-MOV-REC.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
+    .
+
+P-TX-OK-DEPOSITO.
+    MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
+    MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
+    MOVE "OK" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE SPACES TO TXR-DETALHE OF WS-TXR-REC
+    STRING "DEPOSITO conta=" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-CONTA) DELIMITED BY SIZE
+        INTO TXR-DETALHE OF WS-TXR-REC
+    END-STRING.
+    CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
+    .
+
+P-TX-OK-SAQUE.
+    MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
+    MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
+    MOVE "OK" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE SPACES TO TXR-DETALHE OF WS-TXR-REC
+    STRING "SAQUE conta=" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-CONTA) DELIMITED BY SIZE
+        INTO TXR-DETALHE OF WS-TXR-REC
+    END-STRING.
+    CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
+    .
+
+P-TX-OK-TRANSFER.
+    MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
+    MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
+    MOVE "OK" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE SPACES TO TXR-DETALHE OF WS-TXR-REC
+    STRING "TRANSFERENCIA " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-CONTA) DELIMITED BY SIZE
+        "->" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-DESTINO) DELIMITED BY SIZE
+        INTO TXR-DETALHE OF WS-TXR-REC
+    END-STRING.
+    CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
+    .

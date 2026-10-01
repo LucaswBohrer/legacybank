@@ -1,0 +1,15 @@
+# Binarios compilados
+bin/
+*.o
+
+# Dados locais (nunca commitar bases de teste)
+data/
+*.dat
+*.log
+
+# Relatorios de lote gerados
+relatorio_lote_*.txt
+
+# Temporarios do sistema
+*.tmp
+*~

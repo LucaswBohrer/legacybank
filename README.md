@@ -1,0 +1,143 @@
+# LEGACYBANK 🏦
+
+Sistema bancário educacional com o **núcleo 100% em COBOL** — do cadastro
+ao razão, passando por tarifas, idempotência e persistência em arquivos.
+
+> Projeto de estudo: como um core bancário funciona por dentro, escrito
+> na linguagem que ainda move grande parte do sistema financeiro mundial.
+
+## O que faz
+
+- Cadastro de clientes e contas (CC/CP), bloqueio, desbloqueio e encerramento
+- **Depósito**, **saque** (tarifa R$ 1,50) e **transferência** (tarifa R$ 2,00)
+- **Idempotência** por TX-ID: reenviar a mesma transação nunca duplica
+- Rejeições (saldo insuficiente, conta bloqueada, etc.) **não alteram nada**
+- Extrato com saldo corrido, relatório geral, processamento em **lote**
+- Persistência em arquivos texto; checkpoint do journal detecta anomalias
+- Suíte de testes automatizados (funcionais, integridade, batch e carga)
+
+## Stack
+
+| Camada | Tecnologia |
+|---|---|
+| Núcleo | **COBOL** (GnuCOBOL 3.2.0, formato livre) |
+| Persistência | Arquivos `LINE SEQUENTIAL` (`;` como separador) |
+| Build/testes | Shell scripts (apenas automação — zero lógica de negócio) |
+| Geração do lote de carga | Python (só gera dados de teste) |
+
+Dinheiro é tratado em **centavos inteiros** (`PIC 9(13)`) — nunca float.
+
+## Começo rápido
+
+```bash
+# 1. Compilar (requer cobc no PATH)
+./scripts/build.sh
+
+# 2. Inicializar o diretório de dados
+./bin/lb-init ./data
+
+# 3. Usar o menu interativo
+./bin/legacybank ./data
+
+# 4. Ou processar um lote
+./bin/lb-lote ./data exemplos/lote-exemplo.txt
+
+# 5. Rodar os testes
+./tests/run_all.sh
+```
+
+Sessão de exemplo (entradas prontas para redirecionar):
+
+```bash
+./bin/legacybank ./data < exemplos/sessao-exemplo.txt
+```
+
+## Exemplo de uso
+
+```
+Opcao: 4
+Conta: 10000001
+Valor (ex.: 150.75): 1000.00
+OK: Deposito efetuado.
+Opcao: 7
+Conta: 10000001
+
+================ EXTRATO ================
+Conta: 10000001
+Saldo anterior: R$ 0,00
+------------------------------------------
+2026-10-01 11:12  DEPOSITO       +R$ 1.000,00
+2026-10-01 11:12  SAQUE          -R$ 100,00
+2026-10-01 11:12  TARIFA         -R$ 1,50
+------------------------------------------
+Saldo atual:    R$ 898,50
+==========================================
+```
+
+## Arquitetura
+
+```
+legacybank / lb-lote / lb-init   (programas de entrada)
+        │ CALL (ENTRY points)
+┌───────┼───────────────────┐
+▼       ▼                   ▼
+lb-financ  lb-cad    lb-consulta   (regras de negócio)
+        │       │           │
+        └───────┼───────────┘
+                ▼
+            lb-dados               (persistência e journal)
+                ▼
+        arquivos LINE SEQUENTIAL
+```
+
+- **`lb-dados`**: única camada que toca arquivos. Tabelas em memória,
+  sequências, TX-IDs, journal em append e reescrita dos masters via
+  temporário + rename atômico.
+- **`lb-financ`**: valida tudo **antes** de mutar; transferência debita e
+  credita na mesma unidade (impossível debitar sem creditar).
+- **`lb-cad`**: clientes e ciclo de vida das contas.
+- **`lb-consulta`**: extrato, saldo, listagens, relatório, formatação pt-BR.
+
+Detalhes em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
+
+## Documentação
+
+| Documento | Conteúdo |
+|---|---|
+| [`docs/MANUAL-CLI.md`](docs/MANUAL-CLI.md) | Uso do menu e do lote, sessão de exemplo |
+| [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md) | Módulos, fluxo de operação, RCs |
+| [`docs/FORMATO-DADOS.md`](docs/FORMATO-DADOS.md) | Layout de cada arquivo de dados |
+| [`docs/DECISOES.md`](docs/DECISOES.md) | Decisões técnicas e motivos (D01–D18) |
+| [`docs/TESTES.md`](docs/TESTES.md) | Suítes, como rodar, bugs encontrados |
+| [`docs/LIMITACOES.md`](docs/LIMITACOES.md) | Limitações honestas e próximos passos |
+
+## Testes
+
+```bash
+./tests/run_all.sh           # 40 asserções: funcionais + integridade + batch
+./tests/run_all.sh --carga   # + 100.000 transações em lote
+```
+
+Última execução: **40/40 passando**. O teste de carga (100k transações,
+seed determinística, ~30 min) valida que a soma dos saldos confere
+exatamente com o lote — com a ressalva documentada de que a busca de
+idempotência é O(n) por operação (ver L02 em `docs/LIMITACOES.md`).
+
+## Estrutura
+
+```
+legacybank/
+├── src/            # fontes COBOL (+ copy/ com os layouts)
+├── bin/            # executáveis (gerados pelo build)
+├── data/           # diretório de dados padrão (criado pelo lb-init)
+├── docs/           # documentação
+├── exemplos/       # lote e sessão de exemplo
+├── scripts/        # build.sh
+└── tests/          # suíte de testes
+```
+
+## Status
+
+Funcional e testado em Linux x86_64 (GnuCOBOL 3.2.0). Sem camada web —
+decisão de escopo: o núcleo é CLI + batch, e qualquer frontend futuro
+deve chamar os mesmos ENTRY points, nunca reimplementar as regras.

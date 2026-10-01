@@ -1,0 +1,19 @@
+# Sessao de exemplo do menu interativo (entradas, uma por linha).
+# Uso: ./bin/legacybank ./data < exemplos/sessao-exemplo.txt
+1
+Ana Silva
+123.456.789-00
+ana@email.com
+3
+C000001
+CC
+4
+10000001
+1000.00
+5
+10000001
+100.00
+7
+10000001
+14
+0
