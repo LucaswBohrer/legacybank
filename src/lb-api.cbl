@@ -18,6 +18,11 @@
 *>   TX       <txid>
 *>   STATEMENT <conta>
 *>   ACCOUNT  <conta>
+*>   LIST-CLIENTS | LIST-ACCOUNTS | LIST-TXS | LIST-AUDIT [n]
+*>   DASHBOARD
+*>   NEW-CLIENT <nome> <cpf> <email>
+*>   NEW-ACCOUNT <cliente-id> <tipo CC|CP>
+*>   BLOCK|UNBLOCK|CLOSE-ACCT <conta>
 *>
 *> Saida: linhas "CHAVE: valor" em stdout; sempre inclui "RC: n".
 *> Exit: 0 = driver executou (ver RC na saida); 2 = uso/args;
@@ -55,6 +60,13 @@ WORKING-STORAGE SECTION.
    COPY "copy/txreg.cpy".
 01 WS-CTA-REC.
    COPY "copy/contas.cpy".
+01 WS-NOME            PIC X(60).
+01 WS-CPF             PIC X(14).
+01 WS-EMAIL           PIC X(60).
+01 WS-ID-OUT          PIC X(7).
+01 WS-NUM-OUT         PIC X(8).
+01 WS-TIPO2           PIC X(2).
+01 WS-LK-N            PIC 9(4).
 
 PROCEDURE DIVISION.
 MAIN-PARA.
@@ -69,6 +81,16 @@ MAIN-PARA.
         WHEN "TX"        PERFORM P-OP-TX
         WHEN "STATEMENT" PERFORM P-OP-STATEMENT
         WHEN "ACCOUNT"   PERFORM P-OP-ACCOUNT
+        WHEN "LIST-CLIENTS"  PERFORM P-OP-LIST-CLI
+        WHEN "LIST-ACCOUNTS" PERFORM P-OP-LIST-CTA
+        WHEN "LIST-TXS"      PERFORM P-OP-LIST-TXR
+        WHEN "LIST-AUDIT"    PERFORM P-OP-LIST-AUDIT
+        WHEN "DASHBOARD"     PERFORM P-OP-DASHBOARD
+        WHEN "NEW-CLIENT"    PERFORM P-OP-NEW-CLIENT
+        WHEN "NEW-ACCOUNT"   PERFORM P-OP-NEW-ACCOUNT
+        WHEN "BLOCK"         PERFORM P-OP-ACCT-STATUS
+        WHEN "UNBLOCK"       PERFORM P-OP-ACCT-STATUS
+        WHEN "CLOSE-ACCT"    PERFORM P-OP-ACCT-STATUS
         WHEN OTHER
             DISPLAY "RC: 99"
             DISPLAY "MSG: operacao desconhecida"
@@ -210,4 +232,84 @@ P-OP-ACCOUNT.
             FUNCTION TRIM(CTA-STATUS OF WS-CTA-REC)
         DISPLAY "CTA-SALDO: " CTA-SALDO OF WS-CTA-REC
     END-IF.
+    .
+
+*>--------------------------------------------------------------*
+*> TESTE 5 (D33): listagens e cadastros via driver.
+*> Leitura: somente consulta direta aos arquivos (sem LOAD/SAVE),
+*> como P-OP-STATEMENT. Mutacoes: INIT/LOAD/ENTRY/SAVE, como
+*> P-OP-FINANC. Nenhuma regra financeira aqui: so despacho.
+*>--------------------------------------------------------------*
+P-OP-LIST-CLI.
+    CALL "CONS-LISTA-CLIENTES-API" USING WS-DIR.
+    .
+
+P-OP-LIST-CTA.
+    CALL "CONS-LISTA-CONTAS-API" USING WS-DIR.
+    .
+
+P-OP-LIST-TXR.
+    CALL "CONS-LISTA-TXS-API" USING WS-DIR.
+    .
+
+P-OP-LIST-AUDIT.
+    MOVE 100 TO WS-LK-N.
+    IF WS-ARGC >= 3
+        COMPUTE WS-LK-N =
+            FUNCTION NUMVAL(FUNCTION TRIM(WS-P1))
+    END-IF.
+    CALL "CONS-LISTA-AUDIT-API" USING WS-DIR WS-LK-N.
+    .
+
+P-OP-DASHBOARD.
+    CALL "CONS-DASHBOARD-API" USING WS-DIR.
+    .
+
+P-OP-NEW-CLIENT.
+    PERFORM P-INIT-LOAD.
+    MOVE FUNCTION TRIM(WS-P1) TO WS-NOME.
+    MOVE FUNCTION TRIM(WS-P2) TO WS-CPF.
+    MOVE FUNCTION TRIM(WS-P3) TO WS-EMAIL.
+    CALL "CAD-NOVO-CLIENTE" USING WS-NOME WS-CPF WS-EMAIL
+        WS-ID-OUT WS-RC WS-MSG.
+    CALL "LB-DATA-SAVE" USING WS-RC-SAVE.
+    DISPLAY "RC: " WS-RC.
+    DISPLAY "MSG: " FUNCTION TRIM(WS-MSG).
+    IF WS-RC = 0
+        DISPLAY "CLI-ID: " FUNCTION TRIM(WS-ID-OUT)
+    END-IF.
+    .
+
+P-OP-NEW-ACCOUNT.
+    PERFORM P-INIT-LOAD.
+    MOVE FUNCTION TRIM(WS-P1) TO WS-ID24.
+    MOVE FUNCTION TRIM(WS-P2) TO WS-TIPO2.
+    CALL "CAD-NOVA-CONTA" USING WS-ID24 WS-TIPO2
+        WS-NUM-OUT WS-RC WS-MSG.
+    CALL "LB-DATA-SAVE" USING WS-RC-SAVE.
+    DISPLAY "RC: " WS-RC.
+    DISPLAY "MSG: " FUNCTION TRIM(WS-MSG).
+    IF WS-RC = 0
+        DISPLAY "CTA-NUMERO: " FUNCTION TRIM(WS-NUM-OUT)
+    END-IF.
+    .
+
+P-OP-ACCT-STATUS.
+    PERFORM P-INIT-LOAD.
+    MOVE FUNCTION TRIM(WS-P1) TO WS-CONTA.
+    MOVE WS-CONTA TO WS-ID24.
+    EVALUATE WS-OP
+        WHEN "BLOCK"
+            CALL "CAD-BLOQUEAR-CONTA" USING WS-ID24
+                WS-RC WS-MSG
+        WHEN "UNBLOCK"
+            CALL "CAD-DESBLOQUEAR-CONTA" USING WS-ID24
+                WS-RC WS-MSG
+        WHEN "CLOSE-ACCT"
+            CALL "CAD-ENCERRAR-CONTA" USING WS-ID24
+                WS-RC WS-MSG
+    END-EVALUATE.
+    CALL "LB-DATA-SAVE" USING WS-RC-SAVE.
+    DISPLAY "RC: " WS-RC.
+    DISPLAY "MSG: " FUNCTION TRIM(WS-MSG).
     .

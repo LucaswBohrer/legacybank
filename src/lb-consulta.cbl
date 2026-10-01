@@ -20,18 +20,28 @@ FILE-CONTROL.
     SELECT ARQ-CLI ASSIGN TO WS-PATH-CLI
         ORGANIZATION IS LINE SEQUENTIAL
         FILE STATUS IS WS-FS.
+    SELECT ARQ-TXR ASSIGN TO WS-PATH-TXR
+        ORGANIZATION IS LINE SEQUENTIAL
+        FILE STATUS IS WS-FS.
+    SELECT ARQ-AUD ASSIGN TO WS-PATH-AUD
+        ORGANIZATION IS LINE SEQUENTIAL
+        FILE STATUS IS WS-FS.
 
 DATA DIVISION.
 FILE SECTION.
 FD ARQ-MOV. 01 FD-MOV-LINE PIC X(512).
 FD ARQ-CTA. 01 FD-CTA-LINE PIC X(512).
 FD ARQ-CLI. 01 FD-CLI-LINE PIC X(512).
+FD ARQ-TXR. 01 FD-TXR-LINE PIC X(512).
+FD ARQ-AUD. 01 FD-AUD-LINE PIC X(512).
 
 WORKING-STORAGE SECTION.
 01 WS-DIR             PIC X(256).
 01 WS-PATH-MOV        PIC X(300).
 01 WS-PATH-CTA        PIC X(300).
 01 WS-PATH-CLI        PIC X(300).
+01 WS-PATH-TXR        PIC X(300).
+01 WS-PATH-AUD        PIC X(300).
 01 WS-FS              PIC X(2).
 01 WS-LINE            PIC X(512).
 01 WS-EOF             PIC X(1).
@@ -77,6 +87,15 @@ WORKING-STORAGE SECTION.
 01 WS-I               PIC 9(3).
 01 WS-J               PIC 9(3).
 01 WS-LEN             PIC 9(3).
+*> buffer circular para "ultimas N linhas" (auditoria, recentes)
+01 WS-CBUF.
+   05 WS-CBUF-LINE     PIC X(512) OCCURS 300 TIMES.
+01 WS-CBUF-I          PIC 9(4).
+01 WS-CBUF-J          PIC 9(4).
+01 WS-CBUF-TOTAL      PIC 9(7).
+01 WS-CBUF-N          PIC 9(4).
+01 WS-CBUF-POS        PIC 9(4).
+01 WS-CBUF-FIRST      PIC 9(7).
 
 01 WS-CLI-REC.
    COPY "copy/clientes.cpy".
@@ -90,6 +109,7 @@ LINKAGE SECTION.
 01 LK-RC              PIC 9(2).
 01 LK-FMT-VALOR       PIC S9(13).
 01 LK-FMT-TXT         PIC X(40).
+01 LK-N               PIC 9(4).
 
 PROCEDURE DIVISION.
     GOBACK.
@@ -404,6 +424,273 @@ ENTRY "CONS-RELATORIO" USING LK-DIR.
 *>==============================================================*
 *> Rotinas internas
 *>==============================================================*
+
+*> NOTA (quirk GnuCOBOL 3.2): as ENTRYs abaixo ficam no MEIO do
+*> arquivo, antes dos paragrafos. A ultima instrucao da PROCEDURE
+*> DIVISION nao pode ser GOBACK dentro de uma ENTRY (corrompe o
+*> retorno das ENTRYs anteriores: fall-through, DISPLAYs somem,
+*> ate segfault). Paragrafos auxiliares continuam no final.
+*>--------------------------------------------------------------*
+*> CONS-LISTA-CLIENTES-API: lista maquina-legivel (TESTE 5, D33).
+*> Emite "CLI-REC: <linha bruta>" por cliente e "CLI-COUNT: n".
+*> Somente leitura direta do arquivo (sem LOAD/SAVE).
+*>--------------------------------------------------------------*
+ENTRY "CONS-LISTA-CLIENTES-API" USING LK-DIR.
+    PERFORM P-DEFINE-DIR.
+    MOVE SPACES TO WS-PATH-CLI
+    STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
+        "/clientes.dat" DELIMITED BY SIZE
+        INTO WS-PATH-CLI
+    END-STRING.
+    MOVE 0 TO WS-QTD.
+    OPEN INPUT ARQ-CLI.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-CLI
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END
+                    ADD 1 TO WS-QTD
+                    DISPLAY "CLI-REC: "
+                        FUNCTION TRIM(FD-CLI-LINE)
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-CLI
+    END-IF.
+    DISPLAY "CLI-COUNT: " WS-QTD.
+    DISPLAY "RC: 0".
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> CONS-LISTA-CONTAS-API: idem, para contas ("CTA-REC: ...").
+*>--------------------------------------------------------------*
+ENTRY "CONS-LISTA-CONTAS-API" USING LK-DIR.
+    PERFORM P-DEFINE-DIR.
+    MOVE SPACES TO WS-PATH-CTA
+    STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
+        "/contas.dat" DELIMITED BY SIZE
+        INTO WS-PATH-CTA
+    END-STRING.
+    MOVE 0 TO WS-QTD.
+    OPEN INPUT ARQ-CTA.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-CTA
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END
+                    ADD 1 TO WS-QTD
+                    DISPLAY "CTA-REC: "
+                        FUNCTION TRIM(FD-CTA-LINE)
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-CTA
+    END-IF.
+    DISPLAY "CTA-COUNT: " WS-QTD.
+    DISPLAY "RC: 0".
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> CONS-LISTA-TXS-API: idem, para tx_registry.dat ("TXR-REC: ...").
+*>--------------------------------------------------------------*
+ENTRY "CONS-LISTA-TXS-API" USING LK-DIR.
+    PERFORM P-DEFINE-DIR.
+    MOVE SPACES TO WS-PATH-TXR
+    STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
+        "/tx_registry.dat" DELIMITED BY SIZE
+        INTO WS-PATH-TXR
+    END-STRING.
+    MOVE 0 TO WS-QTD.
+    OPEN INPUT ARQ-TXR.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-TXR
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END
+                    ADD 1 TO WS-QTD
+                    DISPLAY "TXR-REC: "
+                        FUNCTION TRIM(FD-TXR-LINE)
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-TXR
+    END-IF.
+    DISPLAY "TXR-COUNT: " WS-QTD.
+    DISPLAY "RC: 0".
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> CONS-LISTA-AUDIT-API: ultimas LK-N linhas de auditoria.log
+*> (buffer circular de 300). Emite "AUD-REC: ..." + "AUD-COUNT".
+*>--------------------------------------------------------------*
+ENTRY "CONS-LISTA-AUDIT-API" USING LK-DIR LK-N.
+    PERFORM P-DEFINE-DIR.
+    MOVE SPACES TO WS-PATH-AUD
+    STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
+        "/auditoria.log" DELIMITED BY SIZE
+        INTO WS-PATH-AUD
+    END-STRING.
+    MOVE LK-N TO WS-CBUF-N.
+    IF WS-CBUF-N = 0 OR WS-CBUF-N > 300
+        MOVE 100 TO WS-CBUF-N
+    END-IF.
+    MOVE 0 TO WS-CBUF-TOTAL.
+    OPEN INPUT ARQ-AUD.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-AUD
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END
+                    ADD 1 TO WS-CBUF-TOTAL
+                    COMPUTE WS-CBUF-POS =
+                        FUNCTION MOD(WS-CBUF-TOTAL - 1, 300) + 1
+                    MOVE FD-AUD-LINE
+                        TO WS-CBUF-LINE(WS-CBUF-POS)
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-AUD
+    END-IF.
+    IF WS-CBUF-TOTAL > WS-CBUF-N
+        COMPUTE WS-CBUF-FIRST = WS-CBUF-TOTAL - WS-CBUF-N + 1
+    ELSE
+        MOVE 1 TO WS-CBUF-FIRST
+    END-IF.
+    MOVE 0 TO WS-QTD.
+    PERFORM VARYING WS-CBUF-J FROM WS-CBUF-FIRST BY 1
+        UNTIL WS-CBUF-J > WS-CBUF-TOTAL
+        COMPUTE WS-CBUF-POS =
+            FUNCTION MOD(WS-CBUF-J - 1, 300) + 1
+        ADD 1 TO WS-QTD
+        DISPLAY "AUD-REC: "
+            FUNCTION TRIM(WS-CBUF-LINE(WS-CBUF-POS))
+    END-PERFORM.
+    DISPLAY "AUD-COUNT: " WS-QTD.
+    DISPLAY "RC: 0".
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> CONS-DASHBOARD-API: agregados maquina-legiveis (TESTE 5, D33).
+*> DB-CLIENTS, DB-ACCOUNTS (+ por status), DB-TOTAL-CENTS,
+*> DB-TXS, DB-MOVS e as ultimas 8 linhas do journal (DB-RECENT).
+*>--------------------------------------------------------------*
+ENTRY "CONS-DASHBOARD-API" USING LK-DIR.
+    PERFORM P-DEFINE-DIR.
+    *> clientes
+    MOVE SPACES TO WS-PATH-CLI
+    STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
+        "/clientes.dat" DELIMITED BY SIZE
+        INTO WS-PATH-CLI
+    END-STRING.
+    MOVE 0 TO WS-QTD-CLI.
+    OPEN INPUT ARQ-CLI.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-CLI
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END ADD 1 TO WS-QTD-CLI
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-CLI
+    END-IF.
+    *> contas: total, por status, soma dos saldos
+    MOVE SPACES TO WS-PATH-CTA
+    STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
+        "/contas.dat" DELIMITED BY SIZE
+        INTO WS-PATH-CTA
+    END-STRING.
+    MOVE 0 TO WS-QTD-CTA WS-QTD-A WS-QTD-B WS-QTD-E
+        WS-SOMA-SALDOS.
+    OPEN INPUT ARQ-CTA.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-CTA
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END
+                    ADD 1 TO WS-QTD-CTA
+                    MOVE FD-CTA-LINE TO WS-LINE
+                    UNSTRING WS-LINE DELIMITED BY ";"
+                        INTO WS-F1 WS-F2 WS-F3 WS-F4 WS-F5 WS-F6
+                    END-UNSTRING
+                    EVALUATE FUNCTION TRIM(WS-F4)
+                        WHEN "A" ADD 1 TO WS-QTD-A
+                        WHEN "B" ADD 1 TO WS-QTD-B
+                        WHEN "E" ADD 1 TO WS-QTD-E
+                    END-EVALUATE
+                    COMPUTE WS-NUM-N =
+                        FUNCTION NUMVAL(FUNCTION TRIM(WS-F5))
+                    ADD WS-NUM-N TO WS-SOMA-SALDOS
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-CTA
+    END-IF.
+    *> transacoes registradas
+    MOVE SPACES TO WS-PATH-TXR
+    STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
+        "/tx_registry.dat" DELIMITED BY SIZE
+        INTO WS-PATH-TXR
+    END-STRING.
+    MOVE 0 TO WS-QTD.
+    OPEN INPUT ARQ-TXR.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-TXR
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END ADD 1 TO WS-QTD
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-TXR
+    END-IF.
+    *> journal: conta linhas e guarda as ultimas 8
+    MOVE SPACES TO WS-PATH-MOV
+    STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
+        "/movimentos.dat" DELIMITED BY SIZE
+        INTO WS-PATH-MOV
+    END-STRING.
+    MOVE 0 TO WS-CBUF-TOTAL.
+    OPEN INPUT ARQ-MOV.
+    IF WS-FS NOT = "35"
+        MOVE "N" TO WS-EOF
+        PERFORM UNTIL WS-EOF = "S"
+            READ ARQ-MOV
+                AT END MOVE "S" TO WS-EOF
+                NOT AT END
+                    ADD 1 TO WS-CBUF-TOTAL
+                    COMPUTE WS-CBUF-POS =
+                        FUNCTION MOD(WS-CBUF-TOTAL - 1, 300) + 1
+                    MOVE FD-MOV-LINE
+                        TO WS-CBUF-LINE(WS-CBUF-POS)
+            END-READ
+        END-PERFORM
+        CLOSE ARQ-MOV
+    END-IF.
+    DISPLAY "DB-CLIENTS: " WS-QTD-CLI.
+    DISPLAY "DB-ACCOUNTS: " WS-QTD-CTA.
+    DISPLAY "DB-ACCOUNTS-A: " WS-QTD-A.
+    DISPLAY "DB-ACCOUNTS-B: " WS-QTD-B.
+    DISPLAY "DB-ACCOUNTS-E: " WS-QTD-E.
+    DISPLAY "DB-TOTAL-CENTS: " WS-SOMA-SALDOS.
+    DISPLAY "DB-TXS: " WS-QTD.
+    DISPLAY "DB-MOVS: " WS-CBUF-TOTAL.
+    IF WS-CBUF-TOTAL > 8
+        COMPUTE WS-CBUF-FIRST = WS-CBUF-TOTAL - 8 + 1
+    ELSE
+        MOVE 1 TO WS-CBUF-FIRST
+    END-IF.
+    PERFORM VARYING WS-CBUF-J FROM WS-CBUF-FIRST BY 1
+        UNTIL WS-CBUF-J > WS-CBUF-TOTAL
+        COMPUTE WS-CBUF-POS =
+            FUNCTION MOD(WS-CBUF-J - 1, 300) + 1
+        DISPLAY "DB-RECENT: "
+            FUNCTION TRIM(WS-CBUF-LINE(WS-CBUF-POS))
+    END-PERFORM.
+    DISPLAY "RC: 0".
+    GOBACK.
+
+
 P-DEFINE-DIR.
     IF FUNCTION TRIM(LK-DIR) = SPACES
         MOVE "./data" TO WS-DIR
