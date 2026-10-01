@@ -60,10 +60,12 @@ WORKING-STORAGE SECTION.
 01 WS-N-SAQ           PIC 9(7).
 01 WS-N-TRA           PIC 9(7).
 01 WS-N-TAR           PIC 9(7).
+01 WS-N-EST           PIC 9(7).
 01 WS-V-DEP           PIC 9(13).
 01 WS-V-SAQ           PIC 9(13).
 01 WS-V-TRA           PIC 9(13).
 01 WS-V-TAR           PIC 9(13).
+01 WS-V-EST           PIC 9(13).
 *> formatacao de valor pt-BR ("1.234,56")
 01 WS-REAIS           PIC 9(11).
 01 WS-CENT            PIC 99.
@@ -252,7 +254,7 @@ ENTRY "CONS-RELATORIO" USING LK-DIR.
     PERFORM P-DEFINE-DIR.
     MOVE 0 TO WS-QTD-CLI WS-QTD-CTA WS-QTD-A WS-QTD-B WS-QTD-E
         WS-SOMA-SALDOS WS-N-DEP WS-N-SAQ WS-N-TRA WS-N-TAR
-        WS-V-DEP WS-V-SAQ WS-V-TRA WS-V-TAR.
+        WS-N-EST WS-V-DEP WS-V-SAQ WS-V-TRA WS-V-TAR WS-V-EST.
     MOVE SPACES TO WS-PATH-CLI
     STRING FUNCTION TRIM(WS-DIR) DELIMITED BY SIZE
         "/clientes.dat" DELIMITED BY SIZE INTO WS-PATH-CLI
@@ -317,6 +319,9 @@ ENTRY "CONS-RELATORIO" USING LK-DIR.
                         WHEN "TARIFA"
                             ADD 1 TO WS-N-TAR
                             ADD WS-NUM-N TO WS-V-TAR
+                        WHEN "ESTORNO"
+                            ADD 1 TO WS-N-EST
+                            ADD WS-NUM-N TO WS-V-EST
                     END-EVALUATE
             END-READ
         END-PERFORM
@@ -338,6 +343,10 @@ ENTRY "CONS-RELATORIO" USING LK-DIR.
     MOVE WS-V-TAR TO WS-CENTAVOS.
     PERFORM P-FORMATA-SINAL.
     DISPLAY "Tarifas cobradas (" WS-N-TAR "): R$ "
+        FUNCTION TRIM(WS-VLR-FMT).
+    MOVE WS-V-EST TO WS-CENTAVOS.
+    PERFORM P-FORMATA-SINAL.
+    DISPLAY "Estornos (" WS-N-EST "): R$ "
         FUNCTION TRIM(WS-VLR-FMT).
     DISPLAY "===========================================".
     GOBACK.
@@ -423,6 +432,15 @@ P-SOMA-SE-DA-CONTA.
             IF WS-CONTA-DEST = FUNCTION TRIM(LK-CONTA)
                 ADD WS-NUM-N TO WS-SOMA-MOV
             END-IF
+        WHEN "ESTORNO"
+            *> mesma convencao de sinal da transferencia:
+            *> debita CONTA, credita CONTA_DESTINO
+            IF WS-CONTA = FUNCTION TRIM(LK-CONTA)
+                SUBTRACT WS-NUM-N FROM WS-SOMA-MOV
+            END-IF
+            IF WS-CONTA-DEST = FUNCTION TRIM(LK-CONTA)
+                ADD WS-NUM-N TO WS-SOMA-MOV
+            END-IF
     END-EVALUATE.
     .
 
@@ -461,6 +479,17 @@ P-EXIBE-SE-DA-CONTA.
                 DISPLAY WS-F2(1:16) "  TRANSF ENTRADA +R$ "
                     FUNCTION TRIM(WS-VLR-FMT)
                     " <- " FUNCTION TRIM(WS-CONTA)
+            END-IF
+        WHEN "ESTORNO"
+            IF WS-CONTA = FUNCTION TRIM(LK-CONTA)
+                SUBTRACT WS-NUM-N FROM WS-CORR
+                DISPLAY WS-F2(1:16) "  ESTORNO        -R$ "
+                    FUNCTION TRIM(WS-VLR-FMT)
+            END-IF
+            IF WS-CONTA-DEST = FUNCTION TRIM(LK-CONTA)
+                ADD WS-NUM-N TO WS-CORR
+                DISPLAY WS-F2(1:16) "  ESTORNO        +R$ "
+                    FUNCTION TRIM(WS-VLR-FMT)
             END-IF
     END-EVALUATE.
     .

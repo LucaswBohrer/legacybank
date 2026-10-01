@@ -59,3 +59,11 @@ arquivos).
 Por decisão de escopo (D12): a entrega atual é CLI + batch. Uma API/web
 deverá chamar os mesmos ENTRY points do núcleo — nunca reimplementar
 as regras.
+
+## L09 — Estorno de transação antiga varre o journal
+
+Transações criadas antes do DETALHE enriquecido (D21) são estornadas via
+`LB-MOV-FIND-TX`, que varre `movimentos.dat` em disco (O(n)). É o caminho
+de compatibilidade/migração (D23): transações novas usam o índice hash
+O(1). Em bases com milhões de movimentos e muitas reversões legadas,
+considerar migração assistida do registry antigo para o formato D21.

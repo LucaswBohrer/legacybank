@@ -1,7 +1,7 @@
 >>SOURCE FORMAT IS FREE
 *>==============================================================*
 *> LEGACYBANK - LB-FINANC
-*> Regras financeiras: deposito, saque e transferencia.
+*> Regras financeiras: deposito, saque, transferencia e estorno.
 *> Protocolo de toda operacao (atomicidade):
 *>   1. validar tudo (valor, contas, status, saldo, idempotencia);
 *>   2. somente apos todas as validacoes, mutar saldos em memoria;
@@ -28,6 +28,31 @@ COPY "copy/constantes.cpy".
 01 WS-AUD-TXT         PIC X(200).
 01 WS-VAL-EDT         PIC $$$,$$$,$$9.99.
 
+*> Estado do estorno (FIN-ESTORNO)
+01 WS-TXR-ORIG-REC.
+   COPY "copy/txreg.cpy".
+01 WS-ORIG-TIPO       PIC X(13).
+01 WS-ORIG-CONTA      PIC X(8).
+01 WS-ORIG-DEST       PIC X(8).
+01 WS-ORIG-VALOR      PIC 9(13).
+01 WS-ORIG-TARIFA     PIC 9(6).
+01 WS-JRN-TARIFA      PIC 9(13).
+01 WS-TOTAL-EST       PIC 9(13).
+01 WS-TXT-80          PIC X(80).
+01 WS-CAMPO           PIC X(80).
+01 WS-F-A             PIC X(80).
+01 WS-F-B             PIC X(80).
+01 WS-F-C             PIC X(80).
+01 WS-F-D             PIC X(80).
+01 WS-DUMMY           PIC X(20).
+01 WS-VAL-TXT2        PIC X(20).
+01 WS-VAL-X13         PIC X(13).
+01 WS-TAR-X6          PIC X(6).
+01 WS-I2              PIC 9(3).
+01 WS-POS             PIC 9(3).
+01 WS-EST-CONTA       PIC X(8).
+01 WS-EST-DEST        PIC X(8).
+
 01 WS-CTA-REC.
    COPY "copy/contas.cpy".
 01 WS-CTA-DEST-REC.
@@ -41,6 +66,7 @@ LINKAGE SECTION.
 01 LK-TXID            PIC X(24).
 01 LK-CONTA           PIC X(8).
 01 LK-DESTINO         PIC X(8).
+01 LK-TXORIG          PIC X(24).
 01 LK-VALOR           PIC 9(13).
 01 LK-RC              PIC 9(2).
 01 LK-MSG             PIC X(80).
@@ -173,6 +199,50 @@ ENTRY "FIN-TRANSFERENCIA"
     MOVE "Transferencia efetuada." TO LK-MSG.
     GOBACK.
 
+*>--------------------------------------------------------------*
+*> FIN-ESTORNO: reverte os efeitos financeiros de uma transacao
+*> anterior sem apaga-la do historico.
+*>   LK-TXID   = TX-ID do estorno (novo; idempotente por TX-ID);
+*>   LK-TXORIG = TX-ID da transacao original.
+*> Regras (D22):
+*>   original inexistente                  -> RC 12;
+*>   original REJEITADA / eh um ESTORNO /
+*>     sem dados de valor no DETALHE       -> RC 13;
+*>   original ja estornada                 -> RC 14.
+*> A tarifa da operacao original eh devolvida integralmente
+*> (D21): a conta volta exatamente ao estado anterior. Os
+*> lancamentos originais (incluindo tarifas) permanecem no
+*> journal; o estorno aparece como novos movimentos ESTORNO.
+*> Estorno de estorno eh impossivel por construcao.
+*>--------------------------------------------------------------*
+ENTRY "FIN-ESTORNO" USING LK-TXID LK-TXORIG LK-RC LK-MSG.
+    PERFORM P-INICIO-OP.
+    PERFORM P-VERIFICA-DUPLICADA.
+    IF LK-RC NOT = 0
+        GOBACK
+    END-IF.
+    PERFORM P-EST-BUSCA-ORIGINAL.
+    IF LK-RC NOT = 0
+        PERFORM P-EST-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    PERFORM P-EST-VALIDA-ORIGINAL.
+    IF LK-RC NOT = 0
+        PERFORM P-EST-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    PERFORM P-EST-VALIDA-CONTAS.
+    IF LK-RC NOT = 0
+        PERFORM P-EST-FIM-REJEITADA
+        GOBACK
+    END-IF.
+    PERFORM P-EST-APLICA.
+    PERFORM P-EST-REGISTRA.
+    PERFORM P-AUDITA-ESTORNO-OK.
+    MOVE 0 TO LK-RC.
+    MOVE "Estorno efetuado." TO LK-MSG.
+    GOBACK.
+
 *>==============================================================*
 *> Rotinas internas
 *>==============================================================*
@@ -255,6 +325,10 @@ P-DESCREVE-ERRO.
         WHEN 5 MOVE "Valor invalido (deve ser positivo)." TO LK-MSG
         WHEN 6 MOVE "Transacao duplicada." TO LK-MSG
         WHEN 11 MOVE "Origem e destino nao podem ser iguais." TO LK-MSG
+        WHEN 12 MOVE "Transacao original nao encontrada." TO LK-MSG
+        WHEN 13 MOVE "Transacao original nao pode ser estornada."
+            TO LK-MSG
+        WHEN 14 MOVE "Transacao original ja estornada." TO LK-MSG
         WHEN OTHER MOVE "Erro interno." TO LK-MSG
     END-EVALUATE.
     .
@@ -353,9 +427,12 @@ P-TX-OK-DEPOSITO.
     MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
     MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
     MOVE "OK" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE LK-VALOR TO WS-VAL-X13.
     MOVE SPACES TO TXR-DETALHE OF WS-TXR-REC
     STRING "DEPOSITO conta=" DELIMITED BY SIZE
         FUNCTION TRIM(LK-CONTA) DELIMITED BY SIZE
+        " valor=" DELIMITED BY SIZE
+        WS-VAL-X13 DELIMITED BY SIZE
         INTO TXR-DETALHE OF WS-TXR-REC
     END-STRING.
     CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
@@ -365,9 +442,15 @@ P-TX-OK-SAQUE.
     MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
     MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
     MOVE "OK" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE LK-VALOR TO WS-VAL-X13.
+    MOVE TARIFA-SAQUE-CENTAVOS TO WS-TAR-X6.
     MOVE SPACES TO TXR-DETALHE OF WS-TXR-REC
     STRING "SAQUE conta=" DELIMITED BY SIZE
         FUNCTION TRIM(LK-CONTA) DELIMITED BY SIZE
+        " valor=" DELIMITED BY SIZE
+        WS-VAL-X13 DELIMITED BY SIZE
+        " tarifa=" DELIMITED BY SIZE
+        WS-TAR-X6 DELIMITED BY SIZE
         INTO TXR-DETALHE OF WS-TXR-REC
     END-STRING.
     CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
@@ -377,12 +460,378 @@ P-TX-OK-TRANSFER.
     MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
     MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
     MOVE "OK" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE LK-VALOR TO WS-VAL-X13.
+    MOVE TARIFA-TRANSFER-CENTAVOS TO WS-TAR-X6.
     MOVE SPACES TO TXR-DETALHE OF WS-TXR-REC
     STRING "TRANSFERENCIA " DELIMITED BY SIZE
         FUNCTION TRIM(LK-CONTA) DELIMITED BY SIZE
         "->" DELIMITED BY SIZE
         FUNCTION TRIM(LK-DESTINO) DELIMITED BY SIZE
+        " valor=" DELIMITED BY SIZE
+        WS-VAL-X13 DELIMITED BY SIZE
+        " tarifa=" DELIMITED BY SIZE
+        WS-TAR-X6 DELIMITED BY SIZE
         INTO TXR-DETALHE OF WS-TXR-REC
     END-STRING.
     CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
+    .
+*>==============================================================*
+*> Rotinas internas do ESTORNO (FIN-ESTORNO)
+*>==============================================================*
+P-EST-BUSCA-ORIGINAL.
+    MOVE FUNCTION TRIM(LK-TXORIG) TO WS-ID24.
+    CALL "LB-TX-FIND" USING WS-ID24 WS-TXR-ORIG-REC WS-FOUND.
+    IF WS-FOUND = "N"
+        MOVE 12 TO LK-RC
+    END-IF.
+    .
+
+P-EST-VALIDA-ORIGINAL.
+    IF FUNCTION TRIM(TXR-RESULTADO OF WS-TXR-ORIG-REC) NOT = "OK"
+        MOVE 13 TO LK-RC
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE 0 TO WS-POS.
+    MOVE FUNCTION TRIM(TXR-DETALHE OF WS-TXR-ORIG-REC)
+        TO WS-TXT-80.
+    INSPECT WS-TXT-80 TALLYING WS-POS FOR ALL ";ESTORNADA".
+    IF WS-POS > 0
+        MOVE 14 TO LK-RC
+        EXIT PARAGRAPH
+    END-IF.
+    PERFORM P-EST-PARSE-DETALHE.
+    .
+
+*> Extrai tipo, conta(s), valor e tarifa do DETALHE da transacao
+*> original (formato escrito por P-TX-OK-*, ver D21/D22):
+*>   DEPOSITO conta=<c> valor=<v>
+*>   SAQUE conta=<c> valor=<v> tarifa=<t>
+*>   TRANSFERENCIA <a>-><b> valor=<v> tarifa=<t>
+*> Linhas no formato antigo (sem "valor=") usam o journal como
+*> fonte da verdade (P-EST-LEGADO-JOURNAL).
+P-EST-PARSE-DETALHE.
+    MOVE 0 TO WS-ORIG-VALOR WS-ORIG-TARIFA.
+    MOVE SPACES TO WS-ORIG-TIPO WS-ORIG-CONTA WS-ORIG-DEST.
+    MOVE FUNCTION TRIM(TXR-DETALHE OF WS-TXR-ORIG-REC)
+        TO WS-TXT-80.
+    MOVE SPACES TO WS-F-A WS-F-B WS-F-C WS-F-D.
+    UNSTRING WS-TXT-80 DELIMITED BY SPACE
+        INTO WS-F-A WS-F-B WS-F-C WS-F-D
+    END-UNSTRING.
+    MOVE FUNCTION TRIM(WS-F-A) TO WS-ORIG-TIPO.
+    EVALUATE WS-ORIG-TIPO
+        WHEN "DEPOSITO" CONTINUE
+        WHEN "SAQUE" CONTINUE
+        WHEN "TRANSFERENCIA" CONTINUE
+        WHEN OTHER
+            MOVE 13 TO LK-RC
+            EXIT PARAGRAPH
+    END-EVALUATE.
+    IF WS-ORIG-TIPO = "TRANSFERENCIA"
+        UNSTRING WS-F-B DELIMITED BY "->"
+            INTO WS-ORIG-CONTA WS-ORIG-DEST
+        END-UNSTRING
+    ELSE
+        MOVE SPACES TO WS-DUMMY
+        UNSTRING WS-F-B DELIMITED BY "="
+            INTO WS-DUMMY WS-ORIG-CONTA
+        END-UNSTRING
+    END-IF.
+    MOVE FUNCTION TRIM(WS-ORIG-CONTA) TO WS-ORIG-CONTA.
+    MOVE FUNCTION TRIM(WS-ORIG-DEST) TO WS-ORIG-DEST.
+    MOVE WS-F-B TO WS-CAMPO.
+    PERFORM P-EST-PARSE-CAMPO.
+    MOVE WS-F-C TO WS-CAMPO.
+    PERFORM P-EST-PARSE-CAMPO.
+    MOVE WS-F-D TO WS-CAMPO.
+    PERFORM P-EST-PARSE-CAMPO.
+    IF WS-ORIG-VALOR <= 0
+        PERFORM P-EST-LEGADO-JOURNAL
+    END-IF.
+    .
+
+*> Compatibilidade com transacoes criadas antes do DETALHE
+*> enriquecido (D21): sem "valor=", o journal (movimentos.dat)
+*> e a fonte da verdade para tipo/conta(s)/valor/tarifa.
+*> A tarifa vem da soma dos movimentos TARIFA do mesmo TX-ID.
+P-EST-LEGADO-JOURNAL.
+    MOVE LK-TXORIG TO WS-ID24.
+    CALL "LB-MOV-FIND-TX" USING WS-ID24 WS-MOV-REC
+        WS-JRN-TARIFA WS-FOUND.
+    IF WS-FOUND = "N"
+        MOVE 13 TO LK-RC
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE MOV-TIPO OF WS-MOV-REC TO WS-ORIG-TIPO.
+    MOVE MOV-CONTA OF WS-MOV-REC TO WS-ORIG-CONTA.
+    MOVE MOV-CONTA-DEST OF WS-MOV-REC TO WS-ORIG-DEST.
+    MOVE MOV-VALOR OF WS-MOV-REC TO WS-ORIG-VALOR.
+    MOVE WS-JRN-TARIFA TO WS-ORIG-TARIFA.
+    EVALUATE WS-ORIG-TIPO
+        WHEN "DEPOSITO" CONTINUE
+        WHEN "SAQUE" CONTINUE
+        WHEN "TRANSFERENCIA" CONTINUE
+        WHEN OTHER
+            MOVE 13 TO LK-RC
+    END-EVALUATE.
+    .
+
+P-EST-PARSE-CAMPO.
+    IF WS-CAMPO(1:6) = "valor="
+        MOVE WS-CAMPO(7:) TO WS-VAL-TXT2
+        COMPUTE WS-ORIG-VALOR =
+            FUNCTION NUMVAL(FUNCTION TRIM(WS-VAL-TXT2))
+    END-IF.
+    IF WS-CAMPO(1:7) = "tarifa="
+        MOVE WS-CAMPO(8:) TO WS-VAL-TXT2
+        COMPUTE WS-ORIG-TARIFA =
+            FUNCTION NUMVAL(FUNCTION TRIM(WS-VAL-TXT2))
+    END-IF.
+    .
+
+*> Valida as contas envolvidas no estorno (existencia + status
+*> ativo, como nas operacoes normais) e o saldo da perna de
+*> debito do estorno. Nenhum saldo eh alterado aqui.
+P-EST-VALIDA-CONTAS.
+    EVALUATE WS-ORIG-TIPO
+        WHEN "DEPOSITO"
+            MOVE WS-ORIG-CONTA TO WS-EST-CONTA
+            PERFORM P-EST-BUSCA-CONTA
+            IF LK-RC NOT = 0
+                EXIT PARAGRAPH
+            END-IF
+            IF CTA-SALDO OF WS-CTA-REC < WS-ORIG-VALOR
+                MOVE 4 TO LK-RC
+                EXIT PARAGRAPH
+            END-IF
+        WHEN "SAQUE"
+            MOVE WS-ORIG-CONTA TO WS-EST-CONTA
+            PERFORM P-EST-BUSCA-CONTA
+            IF LK-RC NOT = 0
+                EXIT PARAGRAPH
+            END-IF
+        WHEN "TRANSFERENCIA"
+            MOVE WS-ORIG-CONTA TO WS-EST-CONTA
+            PERFORM P-EST-BUSCA-CONTA
+            IF LK-RC NOT = 0
+                EXIT PARAGRAPH
+            END-IF
+            MOVE WS-ORIG-DEST TO WS-EST-DEST
+            PERFORM P-EST-BUSCA-DESTINO
+            IF LK-RC NOT = 0
+                EXIT PARAGRAPH
+            END-IF
+            IF CTA-SALDO OF WS-CTA-DEST-REC < WS-ORIG-VALOR
+                MOVE 4 TO LK-RC
+                EXIT PARAGRAPH
+            END-IF
+    END-EVALUATE.
+    .
+
+*> Variantes de P-BUSCA-CONTA/P-BUSCA-DESTINO para o estorno:
+*> FIN-ESTORNO nao recebe LK-CONTA/LK-DESTINO no USING (itens de
+*> LINKAGE nao passados nao tem endereco valido); por isso as
+*> contas sao validadas a partir de WS-EST-CONTA/WS-EST-DEST.
+P-EST-BUSCA-CONTA.
+    MOVE FUNCTION TRIM(WS-EST-CONTA) TO WS-ID24.
+    CALL "LB-CTA-FIND" USING WS-ID24 WS-CTA-REC WS-FOUND.
+    IF WS-FOUND = "N"
+        MOVE 1 TO LK-RC
+        EXIT PARAGRAPH
+    END-IF.
+    EVALUATE CTA-STATUS OF WS-CTA-REC
+        WHEN "B" MOVE 2 TO LK-RC
+        WHEN "E" MOVE 3 TO LK-RC
+        WHEN OTHER MOVE 0 TO LK-RC
+    END-EVALUATE.
+    .
+
+P-EST-BUSCA-DESTINO.
+    MOVE FUNCTION TRIM(WS-EST-DEST) TO WS-ID24.
+    CALL "LB-CTA-FIND" USING WS-ID24 WS-CTA-DEST-REC WS-FOUND.
+    IF WS-FOUND = "N"
+        MOVE 1 TO LK-RC
+        EXIT PARAGRAPH
+    END-IF.
+    EVALUATE CTA-STATUS OF WS-CTA-DEST-REC
+        WHEN "B" MOVE 2 TO LK-RC
+        WHEN "E" MOVE 3 TO LK-RC
+        WHEN OTHER MOVE 0 TO LK-RC
+    END-EVALUATE.
+    .
+
+*> Aplica o estorno em memoria. Na transferencia, as duas pernas
+*> sao validadas antes e mutadas na mesma unidade: impossivel
+*> debitar sem creditar (mesma garantia de FIN-TRANSFERENCIA).
+P-EST-APLICA.
+    EVALUATE WS-ORIG-TIPO
+        WHEN "DEPOSITO"
+            SUBTRACT WS-ORIG-VALOR FROM CTA-SALDO OF WS-CTA-REC
+            CALL "LB-CTA-UPD" USING WS-CTA-REC WS-UPD-RC
+            IF WS-UPD-RC NOT = 0
+                PERFORM P-ERRO-FATAL
+            END-IF
+            PERFORM P-MOV-ESTORNO-DEP
+        WHEN "SAQUE"
+            COMPUTE WS-TOTAL-EST = WS-ORIG-VALOR + WS-ORIG-TARIFA
+            ADD WS-TOTAL-EST TO CTA-SALDO OF WS-CTA-REC
+            CALL "LB-CTA-UPD" USING WS-CTA-REC WS-UPD-RC
+            IF WS-UPD-RC NOT = 0
+                PERFORM P-ERRO-FATAL
+            END-IF
+            PERFORM P-MOV-ESTORNO-SAQ
+        WHEN "TRANSFERENCIA"
+            SUBTRACT WS-ORIG-VALOR
+                FROM CTA-SALDO OF WS-CTA-DEST-REC
+            COMPUTE WS-TOTAL-EST = WS-ORIG-VALOR + WS-ORIG-TARIFA
+            ADD WS-TOTAL-EST TO CTA-SALDO OF WS-CTA-REC
+            CALL "LB-CTA-UPD" USING WS-CTA-REC WS-UPD-RC
+            IF WS-UPD-RC NOT = 0
+                PERFORM P-ERRO-FATAL
+            END-IF
+            CALL "LB-CTA-UPD" USING WS-CTA-DEST-REC WS-UPD-RC
+            IF WS-UPD-RC NOT = 0
+                PERFORM P-ERRO-FATAL
+            END-IF
+            PERFORM P-MOV-ESTORNO-TRA
+            PERFORM P-MOV-ESTORNO-TARIFA
+    END-EVALUATE.
+    .
+
+*> Registra o estorno como OK e carimba ";ESTORNADA" no DETALHE
+*> da transacao original (via LB-TX-UPD: a chave TX-ID nao muda,
+*> o indice hash continua valido). As duas escritas sao em
+*> memoria e vao ao disco no SAVE do chamador.
+P-EST-REGISTRA.
+    MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
+    MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
+    MOVE "OK" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE SPACES TO TXR-DETALHE OF WS-TXR-REC.
+    STRING "ESTORNO de " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXORIG) DELIMITED BY SIZE
+        " " DELIMITED BY SIZE
+        FUNCTION TRIM(WS-ORIG-TIPO) DELIMITED BY SIZE
+        " conta=" DELIMITED BY SIZE
+        FUNCTION TRIM(WS-ORIG-CONTA) DELIMITED BY SIZE
+        INTO TXR-DETALHE OF WS-TXR-REC
+    END-STRING.
+    CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
+    MOVE SPACES TO WS-TXT-80.
+    STRING FUNCTION TRIM(TXR-DETALHE OF WS-TXR-ORIG-REC)
+            DELIMITED BY SIZE
+        ";ESTORNADA" DELIMITED BY SIZE
+        INTO WS-TXT-80
+    END-STRING.
+    MOVE WS-TXT-80 TO TXR-DETALHE OF WS-TXR-ORIG-REC.
+    CALL "LB-TX-UPD" USING WS-TXR-ORIG-REC WS-RC-TX.
+    IF WS-RC-TX NOT = 0
+        PERFORM P-ERRO-FATAL
+    END-IF.
+    .
+
+P-EST-FIM-REJEITADA.
+    PERFORM P-DESCREVE-ERRO.
+    PERFORM P-EST-REGISTRA-REJEITADA.
+    PERFORM P-EST-AUDITA-REJEITADA.
+    .
+
+P-EST-REGISTRA-REJEITADA.
+    MOVE FUNCTION TRIM(LK-TXID) TO TXR-ID OF WS-TXR-REC.
+    MOVE WS-DATAHORA TO TXR-DATAHORA OF WS-TXR-REC.
+    MOVE "REJEITADA" TO TXR-RESULTADO OF WS-TXR-REC.
+    MOVE SPACES TO TXR-DETALHE OF WS-TXR-REC.
+    STRING "ESTORNO de " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXORIG) DELIMITED BY SIZE
+        ": " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-MSG) DELIMITED BY SIZE
+        INTO TXR-DETALHE OF WS-TXR-REC
+    END-STRING.
+    CALL "LB-TX-ADD" USING WS-TXR-REC WS-RC-TX.
+    .
+
+P-EST-AUDITA-REJEITADA.
+    MOVE SPACES TO WS-AUD-TXT.
+    STRING "REJEITADA " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXID) DELIMITED BY SIZE
+        " original=" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXORIG) DELIMITED BY SIZE
+        " motivo=" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-MSG) DELIMITED BY SIZE
+        INTO WS-AUD-TXT
+    END-STRING.
+    CALL "LB-AUDIT" USING WS-AUD-TXT.
+    .
+
+P-AUDITA-ESTORNO-OK.
+    MOVE SPACES TO WS-AUD-TXT.
+    STRING "OK " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXID) DELIMITED BY SIZE
+        " conta=" DELIMITED BY SIZE
+        FUNCTION TRIM(WS-ORIG-CONTA) DELIMITED BY SIZE
+        " estorno_de=" DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXORIG) DELIMITED BY SIZE
+        INTO WS-AUD-TXT
+    END-STRING.
+    CALL "LB-AUDIT" USING WS-AUD-TXT.
+    .
+
+*> Movimentos do journal do estorno (TIPO "ESTORNO"). Convencao
+*> de sinal (igual a TRANSFERENCIA no extrato): debita CONTA,
+*> credita CONTA_DESTINO. Os lancamentos originais nao sao
+*> tocados: o estorno sao movimentos novos.
+P-MOV-ESTORNO-DEP.
+    PERFORM P-NOVO-MOV.
+    MOVE "ESTORNO" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE WS-ORIG-CONTA TO MOV-CONTA OF WS-MOV-REC.
+    MOVE SPACES TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE WS-ORIG-VALOR TO MOV-VALOR OF WS-MOV-REC.
+    MOVE SPACES TO MOV-DESCRICAO OF WS-MOV-REC.
+    STRING "Estorno de deposito " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXORIG) DELIMITED BY SIZE
+        INTO MOV-DESCRICAO OF WS-MOV-REC
+    END-STRING.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
+    .
+
+P-MOV-ESTORNO-SAQ.
+    PERFORM P-NOVO-MOV.
+    MOVE "ESTORNO" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE SPACES TO MOV-CONTA OF WS-MOV-REC.
+    MOVE WS-ORIG-CONTA TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE WS-TOTAL-EST TO MOV-VALOR OF WS-MOV-REC.
+    MOVE SPACES TO MOV-DESCRICAO OF WS-MOV-REC.
+    STRING "Estorno de saque " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXORIG) DELIMITED BY SIZE
+        " (inclui tarifa)" DELIMITED BY SIZE
+        INTO MOV-DESCRICAO OF WS-MOV-REC
+    END-STRING.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
+    .
+
+P-MOV-ESTORNO-TRA.
+    PERFORM P-NOVO-MOV.
+    MOVE "ESTORNO" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE WS-ORIG-DEST TO MOV-CONTA OF WS-MOV-REC.
+    MOVE WS-ORIG-CONTA TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE WS-ORIG-VALOR TO MOV-VALOR OF WS-MOV-REC.
+    MOVE SPACES TO MOV-DESCRICAO OF WS-MOV-REC.
+    STRING "Estorno de transferencia " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXORIG) DELIMITED BY SIZE
+        INTO MOV-DESCRICAO OF WS-MOV-REC
+    END-STRING.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
+    .
+
+P-MOV-ESTORNO-TARIFA.
+    PERFORM P-NOVO-MOV.
+    MOVE "ESTORNO" TO MOV-TIPO OF WS-MOV-REC.
+    MOVE SPACES TO MOV-CONTA OF WS-MOV-REC.
+    MOVE WS-ORIG-CONTA TO MOV-CONTA-DEST OF WS-MOV-REC.
+    MOVE WS-ORIG-TARIFA TO MOV-VALOR OF WS-MOV-REC.
+    MOVE SPACES TO MOV-DESCRICAO OF WS-MOV-REC.
+    STRING "Devolucao de tarifa " DELIMITED BY SIZE
+        FUNCTION TRIM(LK-TXORIG) DELIMITED BY SIZE
+        INTO MOV-DESCRICAO OF WS-MOV-REC
+    END-STRING.
+    CALL "LB-MOV-ADD" USING WS-MOV-REC.
     .

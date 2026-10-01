@@ -20,6 +20,7 @@ Todos aceitam o diretório de dados como argumento opcional/posicional.
  5 Sacar                  12 Desbloquear conta
  6 Transferir             13 Encerrar conta
  7 Extrato                14 Relatorio geral
+                         15 Estornar transacao
  0 Sair
 ```
 
@@ -35,6 +36,12 @@ Todos aceitam o diretório de dados como argumento opcional/posicional.
 - **Transferência:** valor positivo, ambas as contas ativas, origem ≠ destino, saldo da origem ≥ valor + **R$ 2,00** de tarifa. Débito e crédito são aplicados na mesma unidade — impossível debitar sem creditar.
 - **Bloqueio:** conta bloqueada rejeita depósito, saque e transferência (como origem ou destino).
 - **Encerramento:** só com saldo zero.
+- **Estorno (opção 15):** reverte integralmente uma transação OK anterior
+  (depósito, saque ou transferência), devolvendo valor + tarifa quando
+  houver. Gera um **novo TX-ID**; a original é carimbada como estornada e
+  não pode ser estornada de novo. Estorno de estorno e estorno de
+  transação rejeitada são proibidos. Sem saldo suficiente na perna de
+  débito, o estorno é rejeitado sem alterar nada (atomicidade).
 
 ### Sessão de exemplo
 
@@ -85,6 +92,7 @@ linhas vazias são ignoradas):
 DEPOSITO;TX-ID;CONTA;VALOR
 SAQUE;TX-ID;CONTA;VALOR
 TRANSFERENCIA;TX-ID;ORIGEM;DESTINO;VALOR
+ESTORNO;TX-ID-NOVO;TX-ID-ORIGINAL
 ```
 
 Exemplo (`exemplos/lote-exemplo.txt`):

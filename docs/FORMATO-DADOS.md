@@ -86,7 +86,19 @@ TX-ID;DATAHORA;RESULTADO;DETALHE
 | TX-ID | X(24) | `TX-BATCH-0001` |
 | DATAHORA | X(19) | `2026-10-01 11:12:46` |
 | RESULTADO | X(9) | `OK` / `REJEITADA` |
-| DETALHE | X(80) | `DEPOSITO conta=10000001` |
+| DETALHE | X(80) | `DEPOSITO conta=10000001 valor=0000000100000` |
+
+O DETALHE carrega metadados estruturados (D21) para o estorno:
+
+- `DEPOSITO conta=<c> valor=<v>`
+- `SAQUE conta=<c> valor=<v> tarifa=<t>`
+- `TRANSFERENCIA <a>-><b> valor=<v> tarifa=<t>`
+- `ESTORNO de <tx-orig> <tipo> conta=<c> [destino=<d>] valor=<v> tarifa=<t>`
+
+Uma transação original estornada recebe o carimbo `;ESTORNADA` ao final
+do DETALHE (D22). O parser preserva `;` dentro do DETALHE (D24); linhas
+no formato antigo (ex.: `DEPOSITO 150.75`) continuam legíveis e são
+estornáveis via journal (D23).
 
 ## sequencia.dat
 

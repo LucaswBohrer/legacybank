@@ -38,7 +38,7 @@ interativo (`legacybank`) e processamento em lote (`lb-lote`).
 | Módulo | Papel |
 |---|---|
 | `lb-dados` | Única camada que toca arquivos. Mantém tabelas em memória (`OCCURS`), gera sequências e TX-IDs, escreve o journal (`movimentos.dat` + `auditoria.log`) e reescreve os masters via temporário + rename atômico. |
-| `lb-financ` | Regras de negócio: depósito, saque (tarifa R$ 1,50), transferência (tarifa R$ 2,00). Valida tudo **antes** de mutar; registra OK e rejeições no registro de idempotência. |
+| `lb-financ` | Regras de negócio: depósito, saque (tarifa R$ 1,50), transferência (tarifa R$ 2,00), **estorno** (D22). Valida tudo **antes** de mutar; registra OK e rejeições no registro de idempotência. |
 | `lb-cad` | Cadastro/atualização de clientes, abertura/bloqueio/desbloqueio/encerramento de contas. Encerrar exige saldo zero. |
 | `lb-consulta` | Extrato (reconstrói saldo anterior e corrido a partir do journal), saldo, listagens, relatório geral, formatação monetária pt-BR. |
 | `legacybank` | Menu interativo; gera TX-ID automático por operação; persiste após cada operação. |
@@ -80,6 +80,19 @@ Cada transação carrega um `TX-ID`. O `tx_registry.dat` mapeia `TX-ID → resul
 | 9 | Conta com saldo não pode ser encerrada (cadastro) |
 | 10 | Erro interno |
 | 11 | Origem e destino iguais |
+| 12 | (estorno) Transação original inexistente |
+| 13 | (estorno) Transação original não pode ser estornada (rejeitada, é estorno, ou sem metadados) |
+| 14 | (estorno) Transação original já estornada |
+
+## Estorno (D22)
+
+`FIN-ESTORNO(TX-ID-novo, TX-ID-original)` reverte uma transação OK:
+
+1. Valida o TX-ID novo (idempotência, RC 6) e a original (RC 12/13/14).
+2. Extrai tipo/conta(s)/valor/tarifa do DETALHE (D21); formato antigo usa o journal (D23).
+3. Valida as contas e o saldo da perna de débito **antes** de mutar.
+4. Aplica os movimentos compensatórios (`ESTORNO` no journal, tarifa incluída quando houver).
+5. Registra o novo TX-ID como OK e carimba a original com `;ESTORNADA` via `LB-TX-UPD` (só o DETALHE muda; TX-ID e índice preservados).
 
 ## O que NÃO é COBOL (e por quê)
 

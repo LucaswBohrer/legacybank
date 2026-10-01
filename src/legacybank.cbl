@@ -25,6 +25,7 @@ WORKING-STORAGE SECTION.
 01 WS-CONTA           PIC X(8).
 01 WS-DEST            PIC X(8).
 01 WS-TXID            PIC X(24).
+01 WS-TXORIG          PIC X(24).
 01 WS-VAL-TXT         PIC X(40).
 01 WS-VAL-REAL        PIC 9(11)V99.
 01 WS-VAL-CENT        PIC 9(13).
@@ -67,7 +68,7 @@ P-MENU.
     DISPLAY " 5 Sacar                  12 Desbloquear conta".
     DISPLAY " 6 Transferir             13 Encerrar conta".
     DISPLAY " 7 Extrato                14 Relatorio geral".
-    DISPLAY " 0 Sair".
+    DISPLAY "15 Estornar transacao    0  Sair".
     DISPLAY "Opcao: " WITH NO ADVANCING.
     ACCEPT WS-OPCAO.
     EVALUATE FUNCTION TRIM(WS-OPCAO)
@@ -85,6 +86,7 @@ P-MENU.
         WHEN "12" PERFORM P-OP-DESBLOQUEAR
         WHEN "13" PERFORM P-OP-ENCERRAR
         WHEN "14" CALL "CONS-RELATORIO" USING WS-DIR
+        WHEN "15" PERFORM P-OP-ESTORNO
         WHEN "0" CONTINUE
         WHEN OTHER DISPLAY "Opcao invalida."
     END-EVALUATE.
@@ -248,6 +250,18 @@ P-OP-ENCERRAR.
     CALL "CAD-ENCERRAR-CONTA" USING WS-ID24 WS-RC WS-MSG2.
     PERFORM P-MOSTRA-RC.
     IF WS-RC = 0
+        PERFORM P-SALVA
+    END-IF.
+    .
+
+P-OP-ESTORNO.
+    DISPLAY "TX-ID da transacao original: " WITH NO ADVANCING.
+    ACCEPT WS-TXORIG.
+    CALL "LB-TX-GEN" USING WS-TXID.
+    CALL "FIN-ESTORNO" USING WS-TXID WS-TXORIG WS-RC WS-MSG2.
+    PERFORM P-MOSTRA-RC.
+    IF WS-RC = 0
+        DISPLAY "Novo TX-ID (estorno): " FUNCTION TRIM(WS-TXID)
         PERFORM P-SALVA
     END-IF.
     .

@@ -8,6 +8,7 @@
 *>   DEPOSITO;TXID;CONTA;VALOR
 *>   SAQUE;TXID;CONTA;VALOR
 *>   TRANSFERENCIA;TXID;ORIGEM;DESTINO;VALOR
+*>   ESTORNO;TXID-NOVO;TXID-ORIGINAL
 *> VALOR usa ponto decimal (ex.: 150.75). Linhas em branco e linhas
 *> iniciadas por "#" sao ignoradas.
 *>
@@ -50,6 +51,7 @@ WORKING-STORAGE SECTION.
 01 WS-RC              PIC 9(2).
 01 WS-MSG             PIC X(120).
 01 WS-TXID            PIC X(24).
+01 WS-TXORIG          PIC X(24).
 01 WS-CONTA           PIC X(8).
 01 WS-DEST            PIC X(8).
 01 WS-N-OK            PIC 9(7).
@@ -167,6 +169,12 @@ P-PROCESSA-LINHA.
             ELSE
                 ADD 1 TO WS-N-INV
             END-IF
+        WHEN "ESTORNO"
+            MOVE FUNCTION TRIM(WS-F2) TO WS-TXID
+            MOVE FUNCTION TRIM(WS-F3) TO WS-TXORIG
+            CALL "FIN-ESTORNO" USING WS-TXID WS-TXORIG
+                WS-RC WS-MSG
+            PERFORM P-CONTABILIZA
         WHEN OTHER
             ADD 1 TO WS-N-INV
             DISPLAY "Linha " WS-LINE-NUM ": operacao desconhecida."

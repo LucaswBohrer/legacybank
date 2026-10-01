@@ -10,11 +10,12 @@ ao razão, passando por tarifas, idempotência e persistência em arquivos.
 
 - Cadastro de clientes e contas (CC/CP), bloqueio, desbloqueio e encerramento
 - **Depósito**, **saque** (tarifa R$ 1,50) e **transferência** (tarifa R$ 2,00)
+- **Estorno** de transações (devolve valor + tarifa; original carimbada, sem duplo estorno)
 - **Idempotência** por TX-ID: reenviar a mesma transação nunca duplica
 - Rejeições (saldo insuficiente, conta bloqueada, etc.) **não alteram nada**
 - Extrato com saldo corrido, relatório geral, processamento em **lote**
 - Persistência em arquivos texto; checkpoint do journal detecta anomalias
-- Suíte de testes automatizados (funcionais, integridade, batch e carga)
+- Suíte de testes automatizados (funcionais, integridade, batch, índice, estorno e carga)
 
 ## Stack
 

@@ -280,3 +280,78 @@ só da última posição (heurística frágil para TX fora de ordem).
 infinito no primeiro LOAD. Corrigido para `PIC 9(5)` antes do primeiro
 rebuild; pego por revisão do fonte, não por teste (o binário otimizado
 nunca chegou a rodar com o defeito).
+
+---
+
+## D21 — DETALHE enriquecido no registro de idempotência
+
+**Decisão:** `P-TX-OK-DEPOSITO/SAQUE/TRANSFERENCIA` passam a gravar no
+`TXR-DETALHE` metadados estruturados (`conta=`, `valor=`, `tarifa=`,
+`origem->destino`) em vez do texto livre anterior (`DEPOSITO 150.75`).
+
+**Motivo:** o estorno (D22) precisa reconstruir tipo, conta(s), valor e
+tarifa da transação original sem reexecutar lógica de negócio. Guardar os
+metadados no próprio registro de idempotência torna o estorno uma operação
+local O(1) via índice hash, sem varredura do journal no caminho quente.
+
+**Alternativas descartadas:** re-derivar do journal a cada estorno
+(varredura O(n) em disco no fluxo normal); tabela auxiliar persistida
+(duplica fonte da verdade).
+
+---
+
+## D22 — Estorno de transações (`FIN-ESTORNO`)
+
+**Decisão:** novo ENTRY `FIN-ESTORNO` em `lb-financ.cbl` que reverte
+integralmente uma transação OK anterior, com novo TX-ID, movimentos
+compensatórios do tipo `ESTORNO` no journal e carimbo `;ESTORNADA` no
+`TXR-DETALHE` da original (via `LB-TX-UPD`, que altera só o detalhe
+preservando TX-ID e índice).
+
+**Regras:** idempotência do novo TX-ID (RC 6); original inexistente (RC 12);
+original rejeitada/estorno/sem metadados (RC 13); original já estornada
+(RC 14); estorno de estorno proibido; devolução integral de tarifas;
+validação das contas antes de qualquer mutação; transferência revertida
+atomicamente (débito no destino + crédito na origem com tarifa na mesma
+unidade); saldo insuficiente na perna de débito rejeita sem alterar nada
+(RC 4). Depósito→debita valor; saque→credita valor+tarifa;
+transferência→debita destino e credita origem valor+tarifa.
+
+**Motivo:** chargeback/estorno é operação bancária básica; o desenho segue
+as garantias existentes (idempotência, journal append-only, auditoria,
+atomicidade) em vez de criar um caminho especial.
+
+---
+
+## D23 — Compatibilidade do estorno com o formato antigo (journal como fonte da verdade)
+
+**Decisão:** transações criadas antes de D21 (DETALHE sem `valor=`) são
+estornáveis via fallback `P-EST-LEGADO-JOURNAL`: `LB-MOV-FIND-TX` varre
+`movimentos.dat`, localiza o movimento principal pelo TX-ID e soma os
+movimentos `TARIFA` do mesmo TX-ID.
+
+**Motivo:** o formato antigo não guarda conta/valor no DETALHE, mas o
+journal sempre guardou (SEQ;DATAHORA;TIPO;CONTA;DEST;VALOR;TX-ID;...).
+Usar o journal como fonte da verdade evita migração de dados e preserva
+o formato dos arquivos. O custo O(n) em disco ocorre só no caminho
+legado, nunca no fluxo quente (transações novas usam D21, O(1)).
+
+**Detalhe de implementação:** `ARQ-MOV` fica aberto em EXTEND durante a
+sessão; o FIND-TX fecha, abre em INPUT, varre e **reabre em EXTEND**
+(`P-ABRE-APPEND-MOV`) para os appends seguintes não falharem. Pegou-se
+isso por `FS=41` em teste real, não por revisão.
+
+---
+
+## D24 — Parser do registry preserva `;` no DETALHE
+
+**Decisão:** `P-PARSE-TXREG` não faz mais `UNSTRING ... INTO 4 campos`
+(que descartava tudo após o 4º `;`). Agora localiza o 3º `;` e trata
+tudo após ele como DETALHE integral.
+
+**Motivo:** bug real encontrado em teste: o carimbo `;ESTORNADA` (D22)
+era gravado corretamente no SAVE, mas o LOAD o descartava — qualquer
+processo que carregasse e salvasse (inclusive consultar saldo no menu)
+apagava o carimbo e permitia o segundo estorno. O `UNSTRING` em 4 campos
+silenciosamente perdia o 5º campo. A correção preserva o formato do
+arquivo e é compatível com linhas antigas (sem `;` extra).

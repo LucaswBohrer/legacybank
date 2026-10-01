@@ -15,6 +15,8 @@
 | Funcionais | `tests/test_funcional.sh` | Cadastro, abertura de conta, depósito, saque (+tarifa), transferência (+tarifa), todas as rejeições com RC correto, extrato, relatório. 22 asserções. |
 | Integridade | `tests/test_integridade.sh` | Rejeição não altera saldo; transferência não debita sem creditar; reload preserva saldos e journal; checkpoint detecta journal além/aquém do esperado. 8 asserções. |
 | Batch | `tests/test_batch.sh` | Contadores ok/rejeitada/duplicada/inválida; reenvio integral do lote é idempotente (saldos inalterados); relatório do lote é gerado. 10 asserções. |
+| Índice | `tests/test_indice.sh` | Índice hash do TX-ID (D20): unicidade, colisões, reconstrução no LOAD, equivalência financeira antes/depois. 23 asserções. |
+| Estorno | `tests/test_estorno.sh` | Estorno de depósito/saque/transferência; devolução integral de tarifas; RC 12/13/14; idempotência (imediata e pós-restart); saldo insuficiente; atomicidade; formato antigo via journal (D23); extrato e relatório; CLI opção 15. 62 asserções. |
 | Carga | `tests/test_carga.sh` | 100.000 transações (seed fixa 42, 60% depósitos / 20% saques / 20% transferências); confere que a soma dos saldos bate com o lote. |
 
 `tests/lib.sh` tem os helpers (`assert_eq`, `assert_contains`, `parse_saldo`, `run_menu`).
@@ -25,7 +27,11 @@
 funcionais:   22 passaram, 0 falharam
 integridade:   8 passaram, 0 falharam
 batch:        10 passaram, 0 falharam
+indice:       23 passaram, 0 falharam
+estorno:      62 passaram, 0 falharam
 ```
+
+Total: **125/125**, zero regressão.
 
 ## Teste de carga — 100.000 transações
 
@@ -55,3 +61,6 @@ R$ 1.000.000,00 para não haver rejeição por saldo):
 2. `STRING ... INTO` sem limpar o destino → caudas corrompidas nos arquivos (D14).
 3. `LB-TX-ADD` sobrescrevia `LK-RC` → toda rejeição reportada como "OK:" (D15).
 4. Expectativa errada no teste de batch (linha malformada conta como *inválida*, não *rejeitada*) — corrigido o teste, não o código.
+5. `FIN-ESTORNO` usava itens de LINKAGE fora do `USING` → segfault; substituídos por campos de trabalho e parágrafos próprios.
+6. `P-PARSE-TXREG` descartava o 5º campo (`;ESTORNADA`) no LOAD → carimbo perdido a cada SAVE; segundo estorno voltava a ser permitido (D24).
+7. `LB-MOV-FIND-TX` abria `ARQ-MOV` já aberto em EXTEND → `FS=41`; agora fecha, lê em INPUT e reabre em EXTEND (D23).

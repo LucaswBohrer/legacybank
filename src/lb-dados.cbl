@@ -117,6 +117,9 @@ COPY "copy/constantes.cpy".
 01 WS-F1 PIC X(80). 01 WS-F2 PIC X(80). 01 WS-F3 PIC X(80).
 01 WS-F4 PIC X(80). 01 WS-F5 PIC X(80). 01 WS-F6 PIC X(80).
 01 WS-F7 PIC X(80). 01 WS-F8 PIC X(80).
+01 WS-PX-I  PIC 9(4) VALUE 0.
+01 WS-PX-C  PIC 9(2) VALUE 0.
+01 WS-PX-P3 PIC 9(4) VALUE 0.
 
 01 TBL-CLIENTES.
    05 CLI-COUNT       PIC 9(6) VALUE 0.
@@ -140,9 +143,11 @@ COPY "copy/constantes.cpy".
 *> executava 2 varreduras completas de TXR-ITEM -> O(n^2) no lote.
 *>
 *> Propriedades que tornam o indice seguro aqui:
-*> - TXR-ITEM eh append-only: somente LB-TX-ADD e P-CARREGA-TXREG
-*>   escrevem; nunca ha remocao nem alteracao de TXR-ID. O indice
-*>   nunca precisa de remocao.
+*> - TXR-ITEM: somente LB-TX-ADD e P-CARREGA-TXREG CRIAM posicoes;
+*>   LB-TX-UPD pode alterar o DETALHE de uma posicao existente
+*>   (carimbo ";ESTORNADA" do estorno de transacoes), mas nunca o
+*>   TXR-ID nem a ordem das posicoes: o indice nunca precisa de
+*>   remocao nem de re-encadeamento.
 *> - Estado DERIVADO: nunca persistido em disco; reconstruido a
 *>   cada LB-DATA-LOAD a partir de tx_registry.dat. Crash nao o
 *>   corrompe: a fonte da verdade continua sendo o arquivo.
@@ -175,6 +180,7 @@ LINKAGE SECTION.
 01 LK-ID              PIC X(24).
 01 LK-IDX             PIC 9(7).
 01 LK-FOUND           PIC X(1).
+01 LK-TARIFA          PIC 9(13).
 01 LK-N               PIC 9(7).
 01 LK-QUAL            PIC X(10).
 01 LK-VAL             PIC 9(9).
@@ -422,6 +428,24 @@ ENTRY "LB-TX-ADD" USING LK-TXR-REC LK-RC.
     GOBACK.
 
 *>--------------------------------------------------------------*
+*> LB-TX-UPD: atualiza o DETALHE de um TX-ID ja registrado,
+*> localizado via indice hash (O(1) medio). Uso: o estorno
+*> carimba ";ESTORNADA" no DETALHE da transacao original.
+*> A chave (TX-ID) nunca muda: o indice continua valido.
+*> LK-RC = 0 ok; 1 = TX-ID nao encontrado.
+*>--------------------------------------------------------------*
+ENTRY "LB-TX-UPD" USING LK-TXR-REC LK-RC.
+    MOVE 0 TO LK-RC.
+    PERFORM P-TX-FIND-DUP.
+    IF WS-FOUND = "N"
+        MOVE 1 TO LK-RC
+        GOBACK
+    END-IF.
+    MOVE TXR-DETALHE OF LK-TXR-REC
+        TO TXR-DETALHE OF TXR-ITEM(WS-IDX-POS).
+    GOBACK.
+
+*>--------------------------------------------------------------*
 *> LB-SEQ-NEXT: retorna o proximo valor do contador QUAL e incrementa.
 *> QUAL = "CLIENTE" | "CONTA" | "MOV" | "TX"
 *>--------------------------------------------------------------*
@@ -473,6 +497,64 @@ ENTRY "LB-MOV-ADD" USING LK-MOV-REC.
     MOVE FUNCTION TRIM(WS-LINE) TO FD-MOV-LINE.
     WRITE FD-MOV-LINE.
     ADD 1 TO WS-JOURNAL-LINES.
+    GOBACK.
+
+*>--------------------------------------------------------------*
+*> LB-MOV-FIND-TX: localiza no journal (movimentos.dat) os
+*> movimentos de um TX-ID. Uso: compatibilidade com transacoes
+*> criadas antes do DETALHE enriquecido (sem "valor=") — o
+*> journal e a fonte da verdade para tipo/contas/valor/tarifa.
+*> Varredura sequencial O(n) em disco; usada apenas no caminho
+*> legado, nunca no fluxo quente.
+*> LK-MOV-REC: primeiro movimento nao-TARIFA (tipo/conta/dest/valor).
+*> LK-TARIFA: soma dos movimentos TARIFA do mesmo TX-ID.
+*> LK-FOUND: "S" se achou ao menos o movimento principal.
+*>--------------------------------------------------------------*
+ENTRY "LB-MOV-FIND-TX" USING LK-ID LK-MOV-REC LK-TARIFA LK-FOUND.
+    MOVE "N" TO LK-FOUND.
+    MOVE 0 TO LK-TARIFA.
+    MOVE SPACES TO LK-MOV-REC.
+*> O arquivo fica aberto em EXTEND durante a sessao (P-ABRE-
+*> APPEND-MOV): fecha, le em INPUT e reabre em EXTEND para os
+*> appends seguintes continuarem funcionando.
+    CLOSE ARQ-MOV.
+    OPEN INPUT ARQ-MOV.
+    IF WS-FS-MOV NOT = "00"
+        PERFORM P-ABRE-APPEND-MOV
+        GOBACK
+    END-IF.
+    MOVE "N" TO WS-EOF.
+    PERFORM UNTIL WS-EOF = "S"
+        READ ARQ-MOV
+            AT END MOVE "S" TO WS-EOF
+            NOT AT END
+                MOVE FD-MOV-LINE TO WS-LINE
+                UNSTRING WS-LINE DELIMITED BY ";"
+                    INTO WS-F1 WS-F2 WS-F3 WS-F4
+                         WS-F5 WS-F6 WS-F7 WS-F8
+                END-UNSTRING
+                IF FUNCTION TRIM(WS-F7) = FUNCTION TRIM(LK-ID)
+                    IF FUNCTION TRIM(WS-F3) = "TARIFA"
+                        COMPUTE LK-TARIFA = LK-TARIFA
+                            + FUNCTION NUMVAL(FUNCTION TRIM(WS-F6))
+                    ELSE
+                        IF LK-FOUND = "N"
+                            MOVE "S" TO LK-FOUND
+                            MOVE FUNCTION TRIM(WS-F3)
+                                TO MOV-TIPO OF LK-MOV-REC
+                            MOVE FUNCTION TRIM(WS-F4)
+                                TO MOV-CONTA OF LK-MOV-REC
+                            MOVE FUNCTION TRIM(WS-F5)
+                                TO MOV-CONTA-DEST OF LK-MOV-REC
+                            COMPUTE MOV-VALOR OF LK-MOV-REC =
+                                FUNCTION NUMVAL(FUNCTION TRIM(WS-F6))
+                        END-IF
+                    END-IF
+                END-IF
+        END-READ
+    END-PERFORM.
+    CLOSE ARQ-MOV.
+    PERFORM P-ABRE-APPEND-MOV.
     GOBACK.
 
 *>--------------------------------------------------------------*
@@ -566,8 +648,10 @@ P-TX-FIND-DUP.
 *> Invariante: apos qualquer escrita em TXR-ITEM, o TX-ID da
 *> posicao escrita esta encadeado no bucket do seu hash; apos
 *> P-CARREGA-TXREG, as posicoes 1..TXR-COUNT estao encadeadas.
-*> Nenhum outro programa precisa conhecer o indice: LB-TX-FIND
-*> e LB-TX-ADD mantem as assinaturas e a semantica originais.
+*> LB-TX-UPD altera apenas o DETALHE (nunca o TX-ID): nao afeta
+*> o indice. Nenhum outro programa precisa conhecer o indice:
+*> LB-TX-FIND e LB-TX-ADD mantem as assinaturas e a semantica
+*> originais.
 *>--------------------------------------------------------------*
 P-IDX-HASH.
     MOVE 5381 TO WS-IDX-H.
@@ -716,8 +800,29 @@ P-CARREGA-TXREG.
     .
 
 P-PARSE-TXREG.
-    UNSTRING WS-LINE DELIMITED BY ";"
-        INTO WS-F1 WS-F2 WS-F3 WS-F4.
+*> O DETALHE (4o campo) pode conter ";" (ex.: o carimbo
+*> ";ESTORNADA" do estorno). Os 3 primeiros campos nunca
+*> contem ";": o DETALHE e tudo o que vem apos o 3o ";".
+*> Um UNSTRING simples em 4 campos descartaria o resto.
+    MOVE 0 TO WS-PX-C.
+    MOVE 0 TO WS-PX-P3.
+    PERFORM VARYING WS-PX-I FROM 1 BY 1
+            UNTIL WS-PX-I > 512 OR WS-PX-C = 3
+        IF WS-LINE(WS-PX-I:1) = ";"
+            ADD 1 TO WS-PX-C
+            IF WS-PX-C = 3
+                MOVE WS-PX-I TO WS-PX-P3
+            END-IF
+        END-IF
+    END-PERFORM.
+    IF WS-PX-P3 = 0
+        MOVE SPACES TO TXR-DETALHE OF TXR-ITEM(TXR-COUNT)
+        EXIT PARAGRAPH
+    END-IF.
+    UNSTRING WS-LINE(1:WS-PX-P3 - 1) DELIMITED BY ";"
+        INTO WS-F1 WS-F2 WS-F3
+    END-UNSTRING.
+    MOVE WS-LINE(WS-PX-P3 + 1:) TO WS-F4.
     MOVE FUNCTION TRIM(WS-F1) TO TXR-ID OF TXR-ITEM(TXR-COUNT).
     MOVE FUNCTION TRIM(WS-F2) TO TXR-DATAHORA OF TXR-ITEM(TXR-COUNT).
     MOVE FUNCTION TRIM(WS-F3) TO TXR-RESULTADO OF TXR-ITEM(TXR-COUNT).
