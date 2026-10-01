@@ -1,0 +1,29 @@
+# LEGACYBANK — Render Blueprint (plano gratuito)
+#
+# Como usar:
+#   1. Suba este repo para o GitHub (branch main).
+#   2. No dashboard do Render: New -> Blueprint -> selecione o repo.
+#   3. O Render detecta este render.yaml e cria o web service via Docker.
+#
+# Limites do plano gratuito (verificados em 2026-10-01):
+#   - 750 horas/mes por workspace (suficiente p/ 1 servico 24/7);
+#   - sem cartao de credito;
+#   - o servico "dorme" apos 15 min sem trafego (~60 s p/ acordar);
+#   - filesystem EFiMERO: dados somem em restart/redeploy (modo demo).
+services:
+  - type: web
+    name: legacybank
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: PORT
+        value: 8123
+      - key: LBAPI_HOST
+        value: 0.0.0.0
+      - key: LBAPI_DATA_DIR
+        value: /data
+      - key: PYTHONUNBUFFERED
+        value: 1
