@@ -251,3 +251,32 @@ checar duplicada), o reenvio de um TX-ID rejeitado re-executava a
 validação e era contado como "rejeitada" de novo, em vez de "duplicada".
 Idempotência correta: o mesmo TX-ID sempre retorna o resultado anterior
 sem reexecutar — inclusive quando o resultado anterior foi rejeição.
+
+---
+
+## D20 — Índice hash de TX-ID em memória (otimização do lote)
+
+**Decisão:** substituir as duas buscas lineares de TX-ID por transação
+(`LB-TX-FIND` e `P-TX-FIND-DUP`, ambas O(n) sobre `TXR-ITEM`) por um índice
+hash com encadeamento implementado dentro de `lb-dados.cbl`.
+
+**Motivo:** investigação do código mostrou que cada transação financeira
+executava 2 varreduras completas do registro de idempotência → lote O(n²)
+(~10¹⁰ comparações para 100k TXs; ~30 min medidos). O índice (65536
+buckets, hash djb2, ~5 MB) reduz o lookup a O(1) médio sem alterar nenhum
+formato de arquivo, nenhuma assinatura de ENTRY point e nenhuma semântica:
+idempotência (inclusive de rejeições), journal, checkpoint, auditoria,
+persistência e atomicidade de transferências permanecem idênticos —
+ver `docs/PERFORMANCE.md` e a reconciliação antes/depois.
+
+**Alternativas descartadas:** busca binária (inserção O(n)); índice
+persistido em arquivo auxiliar (duplica fonte da verdade, risco pós-crash);
+módulo separado `lb-idx.cbl` (o índice mapeia posições de `TXR-ITEM`, que
+pertence a `lb-dados` — separar espalharia o estado sem ganho); checagem
+só da última posição (heurística frágil para TX fora de ordem).
+
+**Correção durante a implementação:** o contador `WS-IDX-J` foi declarado
+`PIC 9(4)` mas `P-IDX-LIMPA` itera até 65536 — estouro que travaria em loop
+infinito no primeiro LOAD. Corrigido para `PIC 9(5)` antes do primeiro
+rebuild; pego por revisão do fonte, não por teste (o binário otimizado
+nunca chegou a rodar com o defeito).

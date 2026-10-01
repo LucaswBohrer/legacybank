@@ -9,7 +9,7 @@ if [ ! -x ./bin/legacybank ] || [ ! -x ./bin/lb-lote ] || [ ! -x ./bin/lb-init ]
 fi
 
 TOTAL_FAIL=0
-for t in tests/test_funcional.sh tests/test_integridade.sh tests/test_batch.sh; do
+for t in tests/test_funcional.sh tests/test_integridade.sh tests/test_batch.sh tests/test_indice.sh; do
     echo ""
     echo "########## $t ##########"
     bash "$t"

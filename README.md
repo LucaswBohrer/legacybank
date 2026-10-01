@@ -52,6 +52,23 @@ Sessão de exemplo (entradas prontas para redirecionar):
 ./bin/legacybank ./data < exemplos/sessao-exemplo.txt
 ```
 
+### Windows
+
+Funciona com GnuCOBOL via [MSYS2](https://www.msys2.org/) (não validado
+pelo autor ainda — rode `./tests/run_all.sh` e confira 63/63):
+
+```bash
+# no terminal MSYS2 MinGW64
+pacman -Syu
+pacman -S mingw-w64-x86_64-gnucobol
+cobc -V   # deve mostrar GnuCOBOL 3.x
+```
+
+Depois clone o repo, abra o **Git Bash** (ou o terminal MinGW64) na pasta
+do projeto e rode os mesmos comandos do começo rápido (`build.sh`,
+`lb-init`, `legacybank`, `lb-lote`). Os executáveis saem como `.exe`
+em `bin/`.
+
 ## Exemplo de uso
 
 ```
@@ -107,21 +124,21 @@ Detalhes em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
 | [`docs/MANUAL-CLI.md`](docs/MANUAL-CLI.md) | Uso do menu e do lote, sessão de exemplo |
 | [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md) | Módulos, fluxo de operação, RCs |
 | [`docs/FORMATO-DADOS.md`](docs/FORMATO-DADOS.md) | Layout de cada arquivo de dados |
-| [`docs/DECISOES.md`](docs/DECISOES.md) | Decisões técnicas e motivos (D01–D18) |
+| [`docs/DECISOES.md`](docs/DECISOES.md) | Decisões técnicas e motivos (D01–D20) |
 | [`docs/TESTES.md`](docs/TESTES.md) | Suítes, como rodar, bugs encontrados |
 | [`docs/LIMITACOES.md`](docs/LIMITACOES.md) | Limitações honestas e próximos passos |
 
 ## Testes
 
 ```bash
-./tests/run_all.sh           # 40 asserções: funcionais + integridade + batch
+./tests/run_all.sh           # 63 asserções: funcionais + integridade + batch + índice
 ./tests/run_all.sh --carga   # + 100.000 transações em lote
 ```
 
-Última execução: **40/40 passando**. O teste de carga (100k transações,
-seed determinística, ~30 min) valida que a soma dos saldos confere
-exatamente com o lote — com a ressalva documentada de que a busca de
-idempotência é O(n) por operação (ver L02 em `docs/LIMITACOES.md`).
+Última execução: **63/63 passando**. O teste de carga (100k transações,
+seed determinística, ~13 s após a otimização do índice hash — era ~30 min
+na v1.0) valida que a soma dos saldos confere exatamente com o lote.
+Detalhes em `docs/PERFORMANCE.md`.
 
 ## Estrutura
 

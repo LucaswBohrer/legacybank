@@ -4,7 +4,7 @@
 
 ```bash
 ./scripts/build.sh     # compila os 3 executaveis
-./tests/run_all.sh          # suite completa (40 assercoes)
+./tests/run_all.sh          # suite completa (63 assercoes)
 ./tests/run_all.sh --carga  # inclui o teste de carga (100k transacoes)
 ```
 

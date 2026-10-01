@@ -9,13 +9,16 @@ O sistema é single-user. Duas instâncias sobre o mesmo diretório de
 dados corromperiam os arquivos (sem locking). Para multiusuário seria
 necessário lock de arquivo (`fcntl`) ou um gerenciador transacional.
 
-## L02 — Idempotência O(n) por operação
+## L02 — Idempotência O(n) por operação — RESOLVIDA
 
-`LB-TX-FIND` varre o registro linearmente. O custo por transação cresce
+~~`LB-TX-FIND` varre o registro linearmente. O custo por transação cresce
 com o total de transações já processadas (O(n²) no lote). Medido: 100k
-transações levam dezenas de minutos. Caminho de evolução: índice hash
-em memória sobre o TX-ID (tabela de dispersão com overflow), mantendo a
-mesma semântica.
+transações levam dezenas de minutos.~~
+
+**Resolvida** com o índice hash em memória sobre o TX-ID
+(`docs/PERFORMANCE.md`, D20): lookup O(1) médio, mesma semântica,
+mesmos arquivos. Medido: 100k transações em 13,4 s (era 1.681 s).
+Mantida aqui como registro histórico — era a limitação honesta da v1.0.
 
 ## L03 — Checkpoint detecta, não recupera
 

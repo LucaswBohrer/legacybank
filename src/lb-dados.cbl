@@ -133,6 +133,36 @@ COPY "copy/constantes.cpy".
    05 TXR-ITEM OCCURS 500000 TIMES.
       COPY "copy/txreg.cpy".
 
+*>--------------------------------------------------------------*
+*> IDX-TXREG: indice hash do registro de idempotencia.
+*> Resolve o gargalo O(n) por operacao das buscas lineares de
+*> TX-ID (LB-TX-FIND e P-TX-FIND-DUP): cada transacao financeira
+*> executava 2 varreduras completas de TXR-ITEM -> O(n^2) no lote.
+*>
+*> Propriedades que tornam o indice seguro aqui:
+*> - TXR-ITEM eh append-only: somente LB-TX-ADD e P-CARREGA-TXREG
+*>   escrevem; nunca ha remocao nem alteracao de TXR-ID. O indice
+*>   nunca precisa de remocao.
+*> - Estado DERIVADO: nunca persistido em disco; reconstruido a
+*>   cada LB-DATA-LOAD a partir de tx_registry.dat. Crash nao o
+*>   corrompe: a fonte da verdade continua sendo o arquivo.
+*> - Hash djb2 sobre o TX-ID (sem espacos); bucket = MOD 65536 + 1.
+*> - Colisoes por encadeamento (lista ligada via IDX-NXT);
+*>   insercao na cabeca do bucket (LIFO). 0 = fim da cadeia.
+*> - Custo de memoria: ~5 MB (590 KB buckets + 4,5 MB elos).
+*> - Busca media: O(1) (cadeia media < 8 elos mesmo com 500k TXs).
+*>--------------------------------------------------------------*
+01 IDX-TXREG.
+   05 IDX-BKT OCCURS 65536 TIMES PIC 9(9).
+   05 IDX-NXT OCCURS 500000 TIMES PIC 9(9).
+01 WS-IDX-H            PIC 9(10).
+01 WS-IDX-B            PIC 9(9).
+01 WS-IDX-POS          PIC 9(9).
+01 WS-IDX-LAST         PIC 9(9).
+01 WS-IDX-J            PIC 9(5). *> ate 65536 (limpeza dos buckets)
+01 WS-IDX-KEY          PIC X(24).
+01 WS-IDX-LEN          PIC 9(4).
+
 01 SEQS.
    05 SEQ-CLIENTE     PIC 9(6) VALUE 1.
    05 SEQ-CONTA       PIC 9(8) VALUE 10000001.
@@ -286,13 +316,12 @@ ENTRY "LB-CTA-FIND" USING LK-ID LK-CTA-REC LK-FOUND.
 
 ENTRY "LB-TX-FIND" USING LK-ID LK-TXR-REC LK-FOUND.
     MOVE "N" TO LK-FOUND.
-    PERFORM VARYING WS-IDX FROM 1 BY 1 UNTIL WS-IDX > TXR-COUNT
-        IF TXR-ID OF TXR-ITEM(WS-IDX) = FUNCTION TRIM(LK-ID)
-            MOVE CORRESPONDING TXR-ITEM(WS-IDX) TO LK-TXR-REC
-            MOVE "S" TO LK-FOUND
-            EXIT PERFORM
-        END-IF
-    END-PERFORM.
+    MOVE FUNCTION TRIM(LK-ID) TO WS-IDX-KEY.
+    PERFORM P-IDX-LOOKUP.
+    IF WS-FOUND = "S"
+        MOVE CORRESPONDING TXR-ITEM(WS-IDX-POS) TO LK-TXR-REC
+        MOVE "S" TO LK-FOUND
+    END-IF.
     GOBACK.
 
 ENTRY "LB-CLI-GET" USING LK-IDX LK-CLI-REC LK-FOUND.
@@ -387,6 +416,9 @@ ENTRY "LB-TX-ADD" USING LK-TXR-REC LK-RC.
     END-IF.
     ADD 1 TO TXR-COUNT.
     MOVE CORRESPONDING LK-TXR-REC TO TXR-ITEM(TXR-COUNT).
+    MOVE TXR-ID OF TXR-ITEM(TXR-COUNT) TO WS-IDX-KEY.
+    MOVE TXR-COUNT TO WS-IDX-POS.
+    PERFORM P-IDX-INSERT.
     GOBACK.
 
 *>--------------------------------------------------------------*
@@ -525,13 +557,67 @@ P-CTA-FIND-DUP.
     .
 
 P-TX-FIND-DUP.
+    MOVE TXR-ID OF LK-TXR-REC TO WS-IDX-KEY.
+    PERFORM P-IDX-LOOKUP.
+    .
+
+*>--------------------------------------------------------------*
+*> Indice hash de TX-ID (paragrafos internos de lb-dados).
+*> Invariante: apos qualquer escrita em TXR-ITEM, o TX-ID da
+*> posicao escrita esta encadeado no bucket do seu hash; apos
+*> P-CARREGA-TXREG, as posicoes 1..TXR-COUNT estao encadeadas.
+*> Nenhum outro programa precisa conhecer o indice: LB-TX-FIND
+*> e LB-TX-ADD mantem as assinaturas e a semantica originais.
+*>--------------------------------------------------------------*
+P-IDX-HASH.
+    MOVE 5381 TO WS-IDX-H.
+    MOVE FUNCTION LENGTH(FUNCTION TRIM(WS-IDX-KEY)) TO WS-IDX-LEN.
+    PERFORM VARYING WS-IDX-J FROM 1 BY 1
+            UNTIL WS-IDX-J > WS-IDX-LEN
+        COMPUTE WS-IDX-H = FUNCTION MOD(
+            WS-IDX-H * 33 + FUNCTION ORD(WS-IDX-KEY(WS-IDX-J:1)),
+            4294967296)
+    END-PERFORM.
+    COMPUTE WS-IDX-B = FUNCTION MOD(WS-IDX-H, 65536) + 1.
+    .
+
+P-IDX-INSERT.
+    PERFORM P-IDX-HASH.
+    MOVE IDX-BKT(WS-IDX-B) TO IDX-NXT(WS-IDX-POS).
+    MOVE WS-IDX-POS TO IDX-BKT(WS-IDX-B).
+    .
+
+P-IDX-LOOKUP.
+*> Percorre a cadeia inteira guardando o ULTIMO match (= menor
+*> posicao, insercao mais antiga): replica exatamente a semantica
+*> da busca linear antiga, que retornava a primeira ocorrencia.
     MOVE "N" TO WS-FOUND.
-    PERFORM VARYING WS-IDX FROM 1 BY 1 UNTIL WS-IDX > TXR-COUNT
-        IF TXR-ID OF TXR-ITEM(WS-IDX)
-                = FUNCTION TRIM(TXR-ID OF LK-TXR-REC)
+    MOVE 0 TO WS-IDX-POS.
+    MOVE 0 TO WS-IDX-LAST.
+    PERFORM P-IDX-HASH.
+    MOVE IDX-BKT(WS-IDX-B) TO WS-IDX-POS.
+    PERFORM UNTIL WS-IDX-POS = 0
+        IF TXR-ID OF TXR-ITEM(WS-IDX-POS)
+                = FUNCTION TRIM(WS-IDX-KEY)
             MOVE "S" TO WS-FOUND
-            EXIT PERFORM
+            MOVE WS-IDX-POS TO WS-IDX-LAST
         END-IF
+        MOVE IDX-NXT(WS-IDX-POS) TO WS-IDX-POS
+    END-PERFORM.
+    MOVE WS-IDX-LAST TO WS-IDX-POS.
+    .
+
+P-IDX-LIMPA.
+    PERFORM VARYING WS-IDX-J FROM 1 BY 1 UNTIL WS-IDX-J > 65536
+        MOVE 0 TO IDX-BKT(WS-IDX-J)
+    END-PERFORM.
+    .
+
+P-IDX-ENCadeia.
+    PERFORM VARYING WS-IDX-POS FROM 1 BY 1
+            UNTIL WS-IDX-POS > TXR-COUNT
+        MOVE TXR-ID OF TXR-ITEM(WS-IDX-POS) TO WS-IDX-KEY
+        PERFORM P-IDX-INSERT
     END-PERFORM.
     .
 
@@ -606,6 +692,7 @@ P-PARSE-CONTA.
 
 P-CARREGA-TXREG.
     MOVE 0 TO TXR-COUNT.
+    PERFORM P-IDX-LIMPA.
     OPEN INPUT ARQ-TXR.
     IF WS-FS-TXR = "35"
         EXIT PARAGRAPH
@@ -625,6 +712,7 @@ P-CARREGA-TXREG.
         END-READ
     END-PERFORM.
     CLOSE ARQ-TXR.
+    PERFORM P-IDX-ENCadeia.
     .
 
 P-PARSE-TXREG.
